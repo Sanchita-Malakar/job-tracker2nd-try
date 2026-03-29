@@ -1,13 +1,12 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
 
-/* ── Config ───────────────────────────────────────────────── */
 interface StatConfig {
-  label:      string;
-  display:    string;
-  icon:       React.FC<{ color: string }>;
-  accent:     string;
-  glow:       string;
+  label:   string;
+  display: string;
+  icon:    React.FC<{ color: string }>;
+  accent:  string;
+  glow:    string;
 }
 
 const STATS: StatConfig[] = [
@@ -22,7 +21,6 @@ interface StatsStripProps {
   counts: Record<string, number>;
 }
 
-/* ── Strip ────────────────────────────────────────────────── */
 export default function StatsStrip({ counts }: StatsStripProps) {
   return (
     <>
@@ -31,44 +29,32 @@ export default function StatsStrip({ counts }: StatsStripProps) {
           from { opacity:0.2; transform:scale(0.7); }
           to   { opacity:1;   transform:scale(1.5); }
         }
-        @keyframes barIn {
-          from { width:0% }
-          to   { width:100% }
-        }
       `}</style>
       <div style={{
         display: "grid",
-        gridTemplateColumns: "repeat(5,minmax(0,1fr))",
-        gap: "14px",
+        gridTemplateColumns: "repeat(5, minmax(0, 1fr))",
+        gap: "16px",
         width: "100%",
       }}>
         {STATS.map((stat, i) => (
-          <StatCard
-            key={stat.label}
-            stat={stat}
-            count={counts[stat.label] ?? 0}
-            index={i}
-          />
+          <StatCard key={stat.label} stat={stat} count={counts[stat.label] ?? 0} index={i} />
         ))}
       </div>
     </>
   );
 }
 
-/* ── Card ─────────────────────────────────────────────────── */
 function StatCard({ stat, count, index }: { stat: StatConfig; count: number; index: number }) {
   const [hovered,   setHovered]   = useState(false);
   const [displayed, setDisplayed] = useState(0);
   const [mounted,   setMounted]   = useState(false);
   const rafRef = useRef<number | null>(null);
 
-  /* Staggered mount */
   useEffect(() => {
     const t = setTimeout(() => setMounted(true), index * 90 + 60);
     return () => clearTimeout(t);
   }, [index]);
 
-  /* Animated counter */
   useEffect(() => {
     if (!mounted) return;
     if (rafRef.current) cancelAnimationFrame(rafRef.current);
@@ -84,9 +70,10 @@ function StatCard({ stat, count, index }: { stat: StatConfig; count: number; ind
     };
     rafRef.current = requestAnimationFrame(tick);
     return () => { if (rafRef.current) cancelAnimationFrame(rafRef.current); };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [count, mounted]);
 
-  const a   = stat.accent;
+  const a    = stat.accent;
   const Icon = stat.icon;
 
   return (
@@ -95,18 +82,17 @@ function StatCard({ stat, count, index }: { stat: StatConfig; count: number; ind
       onMouseLeave={() => setHovered(false)}
       style={{
         position: "relative",
-        borderRadius: "16px",
+        borderRadius: "18px",
         overflow: "hidden",
-        padding: "20px 18px 22px",
-        background: hovered
-          ? "rgba(255,255,255,0.045)"
-          : "rgba(255,255,255,0.022)",
+        /* ── MORE HEIGHT: padding increased top+bottom ── */
+        padding: "26px 22px 28px",
+        background: hovered ? "rgba(255,255,255,0.048)" : "rgba(255,255,255,0.022)",
         border: `1px solid ${hovered ? a + "55" : "rgba(255,255,255,0.07)"}`,
         boxShadow: hovered
-          ? `0 10px 36px ${stat.glow}, 0 0 0 1px ${a}20`
-          : "0 2px 10px rgba(0,0,0,0.3)",
+          ? `0 14px 40px ${stat.glow}, 0 0 0 1px ${a}22`
+          : "0 2px 12px rgba(0,0,0,0.3)",
         transform: mounted
-          ? hovered ? "translateY(-5px) scale(1.025)" : "translateY(0) scale(1)"
+          ? hovered ? "translateY(-6px) scale(1.03)" : "translateY(0) scale(1)"
           : "translateY(14px)",
         opacity: mounted ? 1 : 0,
         transition: [
@@ -117,6 +103,8 @@ function StatCard({ stat, count, index }: { stat: StatConfig; count: number; ind
           "background 0.25s ease",
         ].join(","),
         cursor: "default",
+        /* ── MIN HEIGHT so cards never collapse ── */
+        minHeight: "170px",
       }}
     >
       {/* Top accent line */}
@@ -137,47 +125,47 @@ function StatCard({ stat, count, index }: { stat: StatConfig; count: number; ind
 
       {/* Sparkles */}
       {hovered && count > 0 && <>
-        <Sparkle top={9}  right={11} color={a} delay={0}   size={4} />
-        <Sparkle top={20} right={23} color={a} delay={110} size={3} />
-        <Sparkle top={14} right={34} color={a} delay={55}  size={2} />
+        <Sparkle top={10} right={12} color={a} delay={0}   size={4} />
+        <Sparkle top={22} right={26} color={a} delay={110} size={3} />
+        <Sparkle top={16} right={38} color={a} delay={55}  size={2} />
       </>}
 
-      {/* Icon chip */}
+      {/* Icon chip — slightly larger */}
       <div style={{
-        width: "40px", height: "40px", borderRadius: "11px",
+        width: "46px", height: "46px", borderRadius: "13px",
         background: `${a}18`,
         border: `1px solid ${a}30`,
         display: "flex", alignItems: "center", justifyContent: "center",
-        marginBottom: "16px",
+        marginBottom: "20px",
         transform: hovered ? "scale(1.12) rotate(-5deg)" : "scale(1) rotate(0deg)",
         transition: "transform 0.32s cubic-bezier(0.34,1.4,0.64,1), box-shadow 0.3s ease",
-        boxShadow: hovered ? `0 4px 16px ${a}40` : "none",
+        boxShadow: hovered ? `0 4px 18px ${a}40` : "none",
       }}>
         <Icon color={hovered ? a : `${a}aa`} />
       </div>
 
-      {/* Count */}
+      {/* Count — larger number */}
       <div style={{
         fontFamily: "'Syne', system-ui, sans-serif",
-        fontSize: "36px",
+        fontSize: "42px",
         fontWeight: 900,
         lineHeight: 1,
-        marginBottom: "7px",
+        marginBottom: "10px",
         color: hovered ? a : `${a}bb`,
-        letterSpacing: "-1px",
+        letterSpacing: "-1.5px",
         transition: "color 0.25s ease, text-shadow 0.25s ease",
-        textShadow: hovered ? `0 0 24px ${a}55` : "none",
+        textShadow: hovered ? `0 0 28px ${a}55` : "none",
       }}>
         {displayed}
       </div>
 
       {/* Label */}
       <div style={{
-        fontSize: "10.5px",
+        fontSize: "11px",
         fontWeight: 700,
-        letterSpacing: "0.09em",
+        letterSpacing: "0.1em",
         textTransform: "uppercase",
-        color: hovered ? "rgba(255,255,255,0.5)" : "rgba(255,255,255,0.25)",
+        color: hovered ? "rgba(255,255,255,0.55)" : "rgba(255,255,255,0.28)",
         transition: "color 0.25s ease",
         whiteSpace: "nowrap",
         overflow: "hidden",
@@ -204,7 +192,6 @@ function StatCard({ stat, count, index }: { stat: StatConfig; count: number; ind
   );
 }
 
-/* ── Sparkle dot ──────────────────────────────────────────── */
 function Sparkle({ top, right, color, delay, size }: {
   top: number; right: number; color: string; delay: number; size: number;
 }) {
@@ -220,10 +207,9 @@ function Sparkle({ top, right, color, delay, size }: {
   );
 }
 
-/* ── Icons ────────────────────────────────────────────────── */
 function SendIcon({ color }: { color: string }) {
   return (
-    <svg width="19" height="19" viewBox="0 0 20 20" fill="none">
+    <svg width="21" height="21" viewBox="0 0 20 20" fill="none">
       <path d="M17 3L9 11M17 3L11 17L9 11M17 3L3 9L9 11"
         stroke={color} strokeWidth="1.65" strokeLinecap="round" strokeLinejoin="round"/>
     </svg>
@@ -231,7 +217,7 @@ function SendIcon({ color }: { color: string }) {
 }
 function MonitorIcon({ color }: { color: string }) {
   return (
-    <svg width="19" height="19" viewBox="0 0 20 20" fill="none">
+    <svg width="21" height="21" viewBox="0 0 20 20" fill="none">
       <rect x="2" y="3" width="16" height="11" rx="2" stroke={color} strokeWidth="1.65"/>
       <path d="M7 17h6M10 14v3" stroke={color} strokeWidth="1.65" strokeLinecap="round"/>
     </svg>
@@ -239,7 +225,7 @@ function MonitorIcon({ color }: { color: string }) {
 }
 function MicIcon({ color }: { color: string }) {
   return (
-    <svg width="19" height="19" viewBox="0 0 20 20" fill="none">
+    <svg width="21" height="21" viewBox="0 0 20 20" fill="none">
       <rect x="7" y="2" width="6" height="9" rx="3" stroke={color} strokeWidth="1.65"/>
       <path d="M4 10a6 6 0 0012 0M10 16v2M7 18h6" stroke={color} strokeWidth="1.65" strokeLinecap="round"/>
     </svg>
@@ -247,7 +233,7 @@ function MicIcon({ color }: { color: string }) {
 }
 function StarIcon({ color }: { color: string }) {
   return (
-    <svg width="19" height="19" viewBox="0 0 20 20" fill="none">
+    <svg width="21" height="21" viewBox="0 0 20 20" fill="none">
       <path d="M10 2l2.4 5 5.6.8-4 4 .9 5.6L10 15l-4.9 2.4.9-5.6-4-4 5.6-.8z"
         stroke={color} strokeWidth="1.65" strokeLinejoin="round"/>
     </svg>
@@ -255,7 +241,7 @@ function StarIcon({ color }: { color: string }) {
 }
 function CrossIcon({ color }: { color: string }) {
   return (
-    <svg width="19" height="19" viewBox="0 0 20 20" fill="none">
+    <svg width="21" height="21" viewBox="0 0 20 20" fill="none">
       <circle cx="10" cy="10" r="7" stroke={color} strokeWidth="1.65"/>
       <path d="M7.5 7.5l5 5M12.5 7.5l-5 5" stroke={color} strokeWidth="1.65" strokeLinecap="round"/>
     </svg>

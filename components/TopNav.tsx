@@ -8,6 +8,7 @@ interface TopNavProps {
   sidebarOpen: boolean;
   onSidebarToggle: () => void;
   onDrawerOpen: () => void;
+  isDrawerOpen?: boolean;
 }
 
 export default function TopNav({
@@ -17,6 +18,7 @@ export default function TopNav({
   sidebarOpen,
   onSidebarToggle,
   onDrawerOpen,
+  isDrawerOpen = false,
 }: TopNavProps) {
   const [notifOpen, setNotifOpen] = useState(false);
   const [addPulsed, setAddPulsed] = useState(false);
@@ -106,10 +108,7 @@ export default function TopNav({
         <button
           className="tn-ham"
           data-x={sidebarOpen ? "true" : "false"}
-          onClick={() => {
-            window.dispatchEvent(new CustomEvent("sidebar:toggle"));
-            onSidebarToggle();
-          }}
+          onClick={onSidebarToggle}
           aria-label="Toggle sidebar"
         >
           <span className="tn-bar tn-bar-1" />
@@ -148,11 +147,27 @@ export default function TopNav({
 
         <div className="tn-gap" />
 
-        <button className="tn-drawer" onClick={onDrawerOpen} aria-label="Open app detail">
-          <div className="tn-dbars">
-            <span /><span /><span />
-          </div>
-          App Detail
+        <button
+          className="tn-drawer"
+          onClick={onDrawerOpen}
+          aria-label="Toggle app detail panel"
+          style={isDrawerOpen ? {
+            background: "rgba(79,142,247,0.18)",
+            borderColor: "rgba(79,142,247,0.45)",
+            color: "#4f8ef7",
+            boxShadow: "0 0 16px rgba(79,142,247,0.2)",
+          } : undefined}
+        >
+          {isDrawerOpen ? (
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" style={{ flexShrink: 0 }}>
+              <path d="M1 13L13 1M1 1l12 12" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"/>
+            </svg>
+          ) : (
+            <div className="tn-dbars">
+              <span /><span /><span />
+            </div>
+          )}
+          {isDrawerOpen ? "Close Panel" : "App Detail"}
         </button>
 
         <div className="tn-sep" />

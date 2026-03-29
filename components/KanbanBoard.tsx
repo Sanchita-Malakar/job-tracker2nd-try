@@ -302,6 +302,28 @@ function KanbanCard({ app, col, cfg, isDragging, onDragStart, onDragEnd, onClick
           {col === "OA" ? "OA" : col}
         </span>
       </div>
+      {/* Click-to-open hint — appears on hover */}
+      <div
+        style={{
+          marginTop: "8px",
+          paddingTop: "8px",
+          borderTop: `1px solid ${cfg.accent}18`,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          gap: "5px",
+          opacity: hovered ? 0.6 : 0,
+          transition: "opacity 0.18s ease",
+        }}
+      >
+        <svg width="10" height="10" viewBox="0 0 12 12" fill="none">
+          <rect x="1" y="1" width="10" height="10" rx="2" stroke={cfg.accent} strokeWidth="1.2"/>
+          <path d="M4 6h4M6 4v4" stroke={cfg.accent} strokeWidth="1.2" strokeLinecap="round"/>
+        </svg>
+        <span style={{ fontSize: "9.5px", color: cfg.accent, fontWeight: 600, letterSpacing: "0.06em", textTransform: "uppercase" }}>
+          View details
+        </span>
+      </div>
     </div>
   );
 }
