@@ -7,13 +7,7 @@ type ColType = (typeof COLS)[number];
 
 const COL_CONFIG: Record<
   ColType,
-  {
-    accent: string;
-    bg: string;
-    labelColor: string;
-    badge: string;
-    badgeText: string;
-  }
+  { accent: string; bg: string; labelColor: string; badge: string; badgeText: string }
 > = {
   Applied:   { accent: "#f59e0b", bg: "rgba(245,158,11,0.07)",  labelColor: "#fbbf24", badge: "rgba(245,158,11,0.15)", badgeText: "#f59e0b" },
   OA:        { accent: "#06b6d4", bg: "rgba(6,182,212,0.07)",   labelColor: "#22d3ee", badge: "rgba(6,182,212,0.15)",  badgeText: "#06b6d4" },
@@ -35,46 +29,42 @@ export default function KanbanBoard({
   onCardClick,
   searchQuery,
 }: KanbanBoardProps) {
-  const [dragId, setDragId] = useState<number | null>(null);
+  const [dragId,   setDragId]   = useState<number | null>(null);
   const [dragOver, setDragOver] = useState<string | null>(null);
 
   const filtered = applications.filter(
-    (a) =>
+    a =>
       searchQuery === "" ||
       a.company.toLowerCase().includes(searchQuery.toLowerCase()) ||
       a.role.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
   return (
-    <div
-      style={{
-        width: "100%",
-        overflowX: "auto",
-        overflowY: "visible",
-        paddingBottom: "8px",
-      }}
-    >
-      <div
-        style={{
-          display: "flex",
-          flexDirection: "row",
-          gap: "14px",
-          minWidth: "900px",
-          width: "100%",
-          alignItems: "flex-start",
-        }}
-      >
-        {COLS.map((col) => {
-          const cards = filtered.filter((a) => a.status === col);
-          const cfg = COL_CONFIG[col];
+    <div style={{ width: "100%", overflowX: "auto", overflowY: "visible", paddingBottom: "8px" }}>
+      <div style={{
+        display: "flex", flexDirection: "row", gap: "14px",
+        minWidth: "900px", width: "100%", alignItems: "flex-start",
+      }}>
+        {COLS.map(col => {
+          const cards  = filtered.filter(a => a.status === col);
+          const cfg    = COL_CONFIG[col];
           const isOver = dragOver === col;
 
           return (
             <div
               key={col}
-              onDragOver={(e) => { e.preventDefault(); setDragOver(col); }}
-              onDragLeave={() => setDragOver(null)}
-              onDrop={() => {
+              onDragOver={e => { e.preventDefault(); setDragOver(col); }}
+              // FIX 1: The native dragLeave fires when the cursor moves from the column
+              // into a *child element* (card div), causing the highlight to flicker off
+              // and back on rapidly. We check relatedTarget — if the element being
+              // entered is still inside this column, we suppress the leave.
+              onDragLeave={e => {
+                const related = e.relatedTarget as Node | null;
+                if (related && (e.currentTarget as HTMLElement).contains(related)) return;
+                setDragOver(null);
+              }}
+              onDrop={e => {
+                e.preventDefault();
                 if (dragId !== null) onStatusChange(dragId, col);
                 setDragOver(null);
                 setDragId(null);
@@ -86,7 +76,11 @@ export default function KanbanBoard({
                 display: "flex",
                 flexDirection: "column",
                 borderRadius: "16px",
-                overflow: "hidden",
+                // FIX 2: Removed `overflow: "hidden"` from the outer column wrapper.
+                // It was clipping the inner scrollable card list (`overflowY: "auto"`)
+                // because a parent with overflow:hidden creates a new stacking context
+                // that swallows the child's scroll. We now rely on the inner card
+                // container's own borderRadius + overflow for visual containment.
                 border: isOver
                   ? `1.5px solid ${cfg.accent}66`
                   : "1.5px solid rgba(255,255,255,0.08)",
@@ -99,97 +93,66 @@ export default function KanbanBoard({
                 transform: isOver ? "scale(1.012)" : "scale(1)",
                 transition: "transform 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease",
                 minHeight: "200px",
-                maxHeight: "70vh",
               }}
             >
               {/* Column Header */}
-              <div
-                style={{
-                  padding: "12px 14px 11px",
-                  borderBottom: "1px solid rgba(255,255,255,0.06)",
-                  background: cfg.bg,
-                  flexShrink: 0,
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "space-between",
-                  gap: "8px",
-                }}
-              >
+              <div style={{
+                padding: "12px 14px 11px",
+                borderBottom: "1px solid rgba(255,255,255,0.06)",
+                background: cfg.bg,
+                flexShrink: 0,
+                display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px",
+                // Keep rounded top corners since we removed overflow:hidden from parent
+                borderRadius: "16px 16px 0 0",
+              }}>
                 <div style={{ display: "flex", alignItems: "center", gap: "8px", minWidth: 0, flex: 1 }}>
-                  <span
-                    style={{
-                      width: "8px",
-                      height: "8px",
-                      borderRadius: "50%",
-                      background: cfg.accent,
-                      boxShadow: `0 0 6px ${cfg.accent}90`,
-                      flexShrink: 0,
-                    }}
-                  />
-                  <span
-                    style={{
-                      fontSize: "11px",
-                      fontWeight: 700,
-                      letterSpacing: "0.07em",
-                      textTransform: "uppercase",
-                      color: cfg.labelColor,
-                      whiteSpace: "nowrap",
-                      overflow: "hidden",
-                      textOverflow: "ellipsis",
-                    }}
-                  >
+                  <span style={{
+                    width: "8px", height: "8px", borderRadius: "50%",
+                    background: cfg.accent, boxShadow: `0 0 6px ${cfg.accent}90`, flexShrink: 0,
+                  }} />
+                  <span style={{
+                    fontSize: "11px", fontWeight: 700, letterSpacing: "0.07em",
+                    textTransform: "uppercase", color: cfg.labelColor,
+                    whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
+                  }}>
                     {col === "OA" ? "Assessment" : col}
                   </span>
                 </div>
-                <span
-                  style={{
-                    fontSize: "11px",
-                    fontWeight: 700,
-                    padding: "2px 8px",
-                    borderRadius: "20px",
-                    background: cfg.badge,
-                    color: cfg.badgeText,
-                    border: `1px solid ${cfg.accent}35`,
-                    flexShrink: 0,
-                  }}
-                >
+                <span style={{
+                  fontSize: "11px", fontWeight: 700, padding: "2px 8px", borderRadius: "20px",
+                  background: cfg.badge, color: cfg.badgeText, border: `1px solid ${cfg.accent}35`, flexShrink: 0,
+                }}>
                   {cards.length}
                 </span>
               </div>
 
-              {/* Cards */}
-              <div
-                style={{
-                  flex: 1,
-                  overflowY: "auto",
-                  overflowX: "hidden",
-                  display: "flex",
-                  flexDirection: "column",
-                  gap: "8px",
-                  padding: "10px",
-                  scrollbarWidth: "none",
-                }}
-              >
+              {/* Cards container — this is what actually scrolls */}
+              <div style={{
+                flex: 1,
+                overflowY: "auto",
+                overflowX: "hidden",
+                display: "flex", flexDirection: "column", gap: "8px",
+                padding: "10px",
+                scrollbarWidth: "none",
+                // Round the bottom corners to match the outer container
+                borderRadius: "0 0 16px 16px",
+                // Cap height so very long columns don't blow out the board
+                maxHeight: "65vh",
+              }}>
                 {cards.length === 0 ? (
-                  <div
-                    style={{
-                      display: "flex",
-                      flexDirection: "column",
-                      alignItems: "center",
-                      justifyContent: "center",
-                      minHeight: "100px",
-                      border: `1.5px dashed ${cfg.accent}35`,
-                      borderRadius: "10px",
-                      color: "rgba(255,255,255,0.22)",
-                      fontSize: "12px",
-                      gap: "6px",
-                    }}
-                  >
+                  <div style={{
+                    display: "flex", flexDirection: "column",
+                    alignItems: "center", justifyContent: "center",
+                    minHeight: "100px",
+                    border: `1.5px dashed ${cfg.accent}35`,
+                    borderRadius: "10px",
+                    color: "rgba(255,255,255,0.22)", fontSize: "12px", gap: "6px",
+                  }}>
                     <span style={{ fontSize: "18px", opacity: 0.4 }}>⊕</span>
                     Drop here
                   </div>
                 ) : (
-                  cards.map((app) => (
+                  cards.map(app => (
                     <KanbanCard
                       key={app.id}
                       app={app}
@@ -248,33 +211,19 @@ function KanbanCard({ app, col, cfg, isDragging, onDragStart, onDragEnd, onClick
         boxShadow: hovered
           ? `-3px 0 14px ${cfg.accent}30, 0 4px 16px rgba(0,0,0,0.3)`
           : "0 1px 4px rgba(0,0,0,0.2)",
-        transition:
-          "transform 0.18s ease, background 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease",
+        transition: "transform 0.18s ease, background 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease",
       }}
     >
-      <div
-        style={{
-          fontSize: "13px",
-          fontWeight: 600,
-          color: "#e8eaf2",
-          marginBottom: "3px",
-          whiteSpace: "nowrap",
-          overflow: "hidden",
-          textOverflow: "ellipsis",
-        }}
-      >
+      <div style={{
+        fontSize: "13px", fontWeight: 600, color: "#e8eaf2", marginBottom: "3px",
+        whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
+      }}>
         {app.company}
       </div>
-      <div
-        style={{
-          fontSize: "11px",
-          color: "rgba(255,255,255,0.42)",
-          marginBottom: "10px",
-          whiteSpace: "nowrap",
-          overflow: "hidden",
-          textOverflow: "ellipsis",
-        }}
-      >
+      <div style={{
+        fontSize: "11px", color: "rgba(255,255,255,0.42)", marginBottom: "10px",
+        whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
+      }}>
         {app.role}
       </div>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "6px" }}>
@@ -285,40 +234,26 @@ function KanbanCard({ app, col, cfg, isDragging, onDragStart, onDragEnd, onClick
           </svg>
           {app.date}
         </span>
-        <span
-          style={{
-            fontSize: "9px",
-            fontWeight: 700,
-            letterSpacing: "0.05em",
-            textTransform: "uppercase",
-            padding: "3px 7px",
-            borderRadius: "20px",
-            background: cfg.badge,
-            color: cfg.badgeText,
-            border: `1px solid ${cfg.accent}35`,
-            flexShrink: 0,
-          }}
-        >
+        <span style={{
+          fontSize: "9px", fontWeight: 700, letterSpacing: "0.05em",
+          textTransform: "uppercase", padding: "3px 7px", borderRadius: "20px",
+          background: cfg.badge, color: cfg.badgeText, border: `1px solid ${cfg.accent}35`, flexShrink: 0,
+        }}>
           {col === "OA" ? "OA" : col}
         </span>
       </div>
-      {/* Click-to-open hint — appears on hover */}
-      <div
-        style={{
-          marginTop: "8px",
-          paddingTop: "8px",
-          borderTop: `1px solid ${cfg.accent}18`,
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          gap: "5px",
-          opacity: hovered ? 0.6 : 0,
-          transition: "opacity 0.18s ease",
-        }}
-      >
+
+      {/* Click-to-open hint */}
+      <div style={{
+        marginTop: "8px", paddingTop: "8px",
+        borderTop: `1px solid ${cfg.accent}18`,
+        display: "flex", alignItems: "center", justifyContent: "center", gap: "5px",
+        opacity: hovered ? 0.6 : 0,
+        transition: "opacity 0.18s ease",
+      }}>
         <svg width="10" height="10" viewBox="0 0 12 12" fill="none">
-          <rect x="1" y="1" width="10" height="10" rx="2" stroke={cfg.accent} strokeWidth="1.2"/>
-          <path d="M4 6h4M6 4v4" stroke={cfg.accent} strokeWidth="1.2" strokeLinecap="round"/>
+          <rect x="1" y="1" width="10" height="10" rx="2" stroke={cfg.accent} strokeWidth="1.2" />
+          <path d="M4 6h4M6 4v4" stroke={cfg.accent} strokeWidth="1.2" strokeLinecap="round" />
         </svg>
         <span style={{ fontSize: "9.5px", color: cfg.accent, fontWeight: 600, letterSpacing: "0.06em", textTransform: "uppercase" }}>
           View details

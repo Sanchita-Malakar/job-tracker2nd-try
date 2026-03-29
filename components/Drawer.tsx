@@ -50,26 +50,25 @@ interface DrawerProps {
 }
 
 export default function Drawer({ app, onClose, onUpdateApp }: DrawerProps) {
-  const [tasks, setTasks] = useState<Task[]>([]);
-  const [notes, setNotes] = useState("");
-  const [files, setFiles] = useState<AppFile[]>([]);
+  const [tasks,     setTasks]     = useState<Task[]>([]);
+  const [notes,     setNotes]     = useState("");
+  const [files,     setFiles]     = useState<AppFile[]>([]);
   const [reminders, setReminders] = useState<Reminder[]>([]);
-  const [showAddTask, setShowAddTask] = useState(false);
-  const [newTaskText, setNewTaskText] = useState("");
-  const [activeTab, setActiveTab] = useState<"tasks" | "files" | "notes" | "reminders">("tasks");
+  const [showAddTask,  setShowAddTask]  = useState(false);
+  const [newTaskText,  setNewTaskText]  = useState("");
+  const [activeTab,    setActiveTab]    = useState<"tasks" | "files" | "notes" | "reminders">("tasks");
 
   // Animation state
-  const [mounted, setMounted] = useState(false);
-  const [visible, setVisible] = useState(false);
+  const [mounted,      setMounted]      = useState(false);
+  const [visible,      setVisible]      = useState(false);
   const [contentReady, setContentReady] = useState(false);
   const prevApp = useRef<Application | null>(null);
 
-  // Open animation
+  // ── Open / close animation ───────────────────────────────────
   useEffect(() => {
     if (app) {
       setMounted(true);
       setContentReady(false);
-      // Stagger: drawer slides in first, then content fades
       requestAnimationFrame(() => {
         requestAnimationFrame(() => {
           setVisible(true);
@@ -78,7 +77,6 @@ export default function Drawer({ app, onClose, onUpdateApp }: DrawerProps) {
       });
       prevApp.current = app;
     } else {
-      // Close: reverse
       setVisible(false);
       setContentReady(false);
       const t = setTimeout(() => setMounted(false), 340);
@@ -86,52 +84,123 @@ export default function Drawer({ app, onClose, onUpdateApp }: DrawerProps) {
     }
   }, [app]);
 
+  // ── Fetch all data from API when app changes ─────────────────
+  // Runs every time a different card is opened.
   useEffect(() => {
-    if (app) {
-      setNotes(app.notes || "No notes yet...");
-      setTasks([
-        { id: 1, text: "Solve 3 DSA problems (LeetCode Medium)", done: false, dueDate: "15 Mar" },
-        { id: 2, text: "Revise DBMS & SQL concepts", done: false, dueDate: "16 Mar" },
-        { id: 3, text: "Prepare HR answers", done: app.status === "Interview", dueDate: "17 Mar" },
-        { id: 4, text: "Research company culture & projects", done: false },
-        { id: 5, text: "Practice behavioral questions", done: false, dueDate: "18 Mar" },
-      ]);
-      setFiles([
-        { id: 1, name: "Resume_RahulDev_2025.pdf", icon: "📄", size: "1.2 MB", type: "pdf", uploadedAt: "12 Mar" },
-        { id: 2, name: "CoverLetter_Google.pdf",   icon: "📝", size: "320 KB", type: "pdf", uploadedAt: "10 Mar" },
-        { id: 3, name: "Screenshot_OA_Score.png",  icon: "🖼️", size: "245 KB", type: "image", uploadedAt: "05 Mar" },
-      ]);
-      setReminders([
-        { id: 1, title: `${app.company} Technical Interview`, date: "20 Mar", time: "11:00 AM", type: "interview" },
-        { id: 2, title: "Follow up with recruiter",           date: "25 Mar", time: "09:00 AM", type: "followup"  },
-      ]);
-    }
+    if (!app) return;
+
+    // Always sync notes from the app prop (saved in applications table)
+    setNotes(app.notes || "");
+
+    // Clear stale data immediately so previous app's data doesn't flash
+    setTasks([]);
+    setFiles([]);
+    setReminders([]);
+
+    const id = app.id;
+
+    // Fetch tasks
+    fetch(`/api/applications/${id}/tasks`)
+      .then(r => r.ok ? r.json() : [])
+      .then((data: Task[]) => setTasks(data))
+      .catch(() => setTasks([]));
+
+    // Fetch files metadata
+    fetch(`/api/applications/${id}/files`)
+      .then(r => r.ok ? r.json() : [])
+      .then((data: AppFile[]) => setFiles(data))
+      .catch(() => setFiles([]));
+
+    // ── REMINDERS — the calls you asked about ────────────────────
+    // GET /api/applications/:id/reminders
+    fetch(`/api/applications/${id}/reminders`)
+      .then(r => r.ok ? r.json() : [])
+      .then((data: Reminder[]) => setReminders(data))
+      .catch(() => setReminders([]));
+
   }, [app]);
 
-  const toggleTask = (id: number) => {
-    setTasks(prev => {
-      const updated = prev.map(t => t.id === id ? { ...t, done: !t.done } : t);
-      if (onUpdateApp) onUpdateApp({ notes });
-      return updated;
-    });
-  };
-
-  const addTask = () => {
-    if (newTaskText.trim()) {
-      setTasks(prev => [{
-        id: Date.now(),
-        text: newTaskText.trim(),
-        done: false,
-        dueDate: new Date(Date.now() + 3 * 24 * 60 * 60 * 1000).toLocaleDateString("en-GB", { day: "2-digit", month: "short" }),
-      }, ...prev]);
-      setNewTaskText("");
-      setShowAddTask(false);
+  // ── Tasks — PATCH toggle, POST add, DELETE remove ────────────
+  const toggleTask = async (id: number) => {
+    const task = tasks.find(t => t.id === id);
+    if (!task) return;
+    // Optimistic update
+    setTasks(prev => prev.map(t => t.id === id ? { ...t, done: !t.done } : t));
+    try {
+      await fetch(`/api/tasks/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ done: !task.done }),
+      });
+    } catch {
+      // Rollback on failure
+      setTasks(prev => prev.map(t => t.id === id ? { ...t, done: task.done } : t));
     }
   };
 
-  const deleteTask     = (id: number) => setTasks(prev => prev.filter(t => t.id !== id));
-  const deleteFile     = (id: number) => setFiles(prev => prev.filter(f => f.id !== id));
-  const deleteReminder = (id: number) => setReminders(prev => prev.filter(r => r.id !== id));
+  const addTask = async () => {
+    if (!newTaskText.trim() || !app) return;
+    const dueDate = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000)
+      .toLocaleDateString("en-GB", { day: "2-digit", month: "short" });
+    // Optimistic insert
+    const tempId = Date.now();
+    setTasks(prev => [{ id: tempId, text: newTaskText.trim(), done: false, dueDate }, ...prev]);
+    setNewTaskText("");
+    setShowAddTask(false);
+    try {
+      const res = await fetch(`/api/applications/${app.id}/tasks`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: newTaskText.trim(), due_date: dueDate }),
+      });
+      if (res.ok) {
+        const created: Task = await res.json();
+        // Replace temp id with real DB id
+        setTasks(prev => prev.map(t => t.id === tempId ? created : t));
+      }
+    } catch {
+      setTasks(prev => prev.filter(t => t.id !== tempId));
+    }
+  };
+
+  const deleteTask = async (id: number) => {
+    setTasks(prev => prev.filter(t => t.id !== id));   // optimistic
+    await fetch(`/api/tasks/${id}`, { method: "DELETE" }).catch(() => {});
+  };
+
+  // ── Files — DELETE remove ────────────────────────────────────
+  const deleteFile = async (id: number) => {
+    setFiles(prev => prev.filter(f => f.id !== id));   // optimistic
+    await fetch(`/api/files/${id}`, { method: "DELETE" }).catch(() => {});
+  };
+
+  // ── Reminders — POST add, DELETE remove ─────────────────────
+  // POST /api/applications/:id/reminders
+  const addReminder = async (reminder: Omit<Reminder, "id">) => {
+    if (!app) return;
+    const tempId = Date.now();
+    // Optimistic insert
+    setReminders(prev => [...prev, { ...reminder, id: tempId }]);
+    try {
+      const res = await fetch(`/api/applications/${app.id}/reminders`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(reminder),
+      });
+      if (res.ok) {
+        const created: Reminder = await res.json();
+        setReminders(prev => prev.map(r => r.id === tempId ? created : r));
+      }
+    } catch {
+      setReminders(prev => prev.filter(r => r.id !== tempId));
+    }
+  };
+
+  // DELETE /api/reminders/:reminderId
+  const deleteReminder = async (id: number) => {
+    setReminders(prev => prev.filter(r => r.id !== id));   // optimistic
+    await fetch(`/api/reminders/${id}`, { method: "DELETE" }).catch(() => {});
+  };
 
   const c = app ? STATUS_COLORS[app.status] ?? STATUS_COLORS.Applied : STATUS_COLORS.Applied;
   const currentStageIdx = app ? TIMELINE_STAGES.indexOf(app.status) : -1;
@@ -425,7 +494,7 @@ export default function Drawer({ app, onClose, onUpdateApp }: DrawerProps) {
             )}
             {activeTab === "files"     && <FilesTab files={files} onDelete={deleteFile} contentReady={contentReady} />}
             {activeTab === "notes"     && <NotesTab notes={notes} onChange={setNotes} contentReady={contentReady} />}
-            {activeTab === "reminders" && <RemindersTab reminders={reminders} onDelete={deleteReminder} contentReady={contentReady} />}
+            {activeTab === "reminders" && <RemindersTab reminders={reminders} onDelete={deleteReminder} onAdd={addReminder} contentReady={contentReady} />}
           </div>
         </div>
       </aside>
@@ -838,26 +907,162 @@ function NotesTab({ notes, onChange, contentReady }: { notes: string; onChange: 
 }
 
 /* ─── Reminders Tab ─── */
-function RemindersTab({ reminders, onDelete, contentReady }: { reminders: Reminder[]; onDelete: (id: number) => void; contentReady: boolean }) {
+function RemindersTab({ reminders, onDelete, onAdd, contentReady }: {
+  reminders: Reminder[];
+  onDelete: (id: number) => void;
+  onAdd: (r: Omit<Reminder, "id">) => void;
+  contentReady: boolean;
+}) {
+  const [showForm, setShowForm] = useState(false);
+  const [title,    setTitle]    = useState("");
+  const [date,     setDate]     = useState("");
+  const [time,     setTime]     = useState("");
+  const [type,     setType]     = useState<Reminder["type"]>("followup");
+
+  const handleAdd = () => {
+    if (!title.trim() || !date.trim() || !time.trim()) return;
+    // POST /api/applications/:id/reminders  (called via onAdd passed from Drawer)
+    onAdd({ title: title.trim(), date: date.trim(), time: time.trim(), type });
+    setTitle(""); setDate(""); setTime(""); setType("followup");
+    setShowForm(false);
+  };
+
   return (
     <AnimatedSection title="🔔 Upcoming Reminders" delay={80} contentReady={contentReady}>
       <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+        {reminders.length === 0 && !showForm && (
+          <div style={{ textAlign: "center", padding: "24px 0", color: "rgba(255,255,255,0.25)", fontSize: 13 }}>
+            No reminders yet
+          </div>
+        )}
         {reminders.map((r, i) => (
           <div key={r.id} style={{ animation: `fadeSlideUp 280ms cubic-bezier(0.34,1.2,0.64,1) ${i * 60}ms both` }}>
             <ReminderItem reminder={r} onDelete={() => onDelete(r.id)} />
           </div>
         ))}
-        <button style={{
-          width: "100%", padding: "16px 24px",
-          background: "linear-gradient(135deg, rgba(167,139,250,0.1), rgba(139,92,246,0.1))",
-          border: "2px dashed rgba(167,139,250,0.4)",
-          borderRadius: 16, color: "#a78bfa", fontSize: 15, fontWeight: 700,
-          cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 10,
-          transition: "all 250ms ease",
-        }}
-        onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.borderColor = "rgba(167,139,250,0.7)"; (e.currentTarget as HTMLButtonElement).style.background = "rgba(167,139,250,0.2)"; (e.currentTarget as HTMLButtonElement).style.transform = "scale(1.01)"; }}
-        onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.borderColor = "rgba(167,139,250,0.4)"; (e.currentTarget as HTMLButtonElement).style.background = "linear-gradient(135deg, rgba(167,139,250,0.1), rgba(139,92,246,0.1))"; (e.currentTarget as HTMLButtonElement).style.transform = "scale(1)"; }}
-        >⏰ Add Reminder</button>
+
+        {/* ── Add reminder inline form ── */}
+        {showForm ? (
+          <div style={{
+            padding: 16, borderRadius: 16,
+            background: "linear-gradient(135deg, rgba(167,139,250,0.08), rgba(139,92,246,0.08))",
+            border: "2px dashed rgba(167,139,250,0.4)",
+            display: "flex", flexDirection: "column", gap: 10,
+            animation: "fadeSlideUp 220ms cubic-bezier(0.34,1.56,0.64,1) both",
+          }}>
+            {/* Title */}
+            <input
+              autoFocus
+              value={title}
+              onChange={e => setTitle(e.target.value)}
+              placeholder="Reminder title…"
+              style={{
+                background: "rgba(24,28,38,0.7)", border: "1px solid rgba(45,51,82,0.5)",
+                borderRadius: 10, padding: "9px 13px", fontSize: 13, color: "#e8eaf2",
+                outline: "none", width: "100%", boxSizing: "border-box",
+              }}
+              onFocus={e => (e.currentTarget.style.borderColor = "rgba(167,139,250,0.5)")}
+              onBlur={e  => (e.currentTarget.style.borderColor = "rgba(45,51,82,0.5)")}
+            />
+
+            {/* Date + Time row */}
+            <div style={{ display: "flex", gap: 8 }}>
+              <input
+                type="date"
+                value={date}
+                onChange={e => {
+                  // Convert yyyy-mm-dd → "20 Mar" display format
+                  const d = new Date(e.target.value + "T00:00:00");
+                  const formatted = d.toLocaleDateString("en-GB", { day: "2-digit", month: "short" });
+                  setDate(formatted);
+                }}
+                style={{
+                  flex: 1, background: "rgba(24,28,38,0.7)", border: "1px solid rgba(45,51,82,0.5)",
+                  borderRadius: 10, padding: "9px 13px", fontSize: 13, color: "#e8eaf2",
+                  outline: "none", colorScheme: "dark", boxSizing: "border-box",
+                }}
+              />
+              <input
+                type="time"
+                value={time}
+                onChange={e => {
+                  // Convert 24h → "11:00 AM" display format
+                  const [h, m] = e.target.value.split(":");
+                  const hour = parseInt(h);
+                  const ampm = hour >= 12 ? "PM" : "AM";
+                  const display = `${hour % 12 || 12}:${m} ${ampm}`;
+                  setTime(display);
+                }}
+                style={{
+                  flex: 1, background: "rgba(24,28,38,0.7)", border: "1px solid rgba(45,51,82,0.5)",
+                  borderRadius: 10, padding: "9px 13px", fontSize: 13, color: "#e8eaf2",
+                  outline: "none", colorScheme: "dark", boxSizing: "border-box",
+                }}
+              />
+            </div>
+
+            {/* Type selector */}
+            <div style={{ display: "flex", gap: 6 }}>
+              {(["interview", "deadline", "followup"] as Reminder["type"][]).map(t => (
+                <button
+                  key={t}
+                  onClick={() => setType(t)}
+                  style={{
+                    flex: 1, padding: "7px 4px", borderRadius: 8, fontSize: 11, fontWeight: 700,
+                    cursor: "pointer", textTransform: "capitalize",
+                    background: type === t ? "rgba(167,139,250,0.25)" : "rgba(24,28,38,0.5)",
+                    border: type === t ? "1px solid rgba(167,139,250,0.6)" : "1px solid rgba(45,51,82,0.4)",
+                    color: type === t ? "#a78bfa" : "rgba(255,255,255,0.4)",
+                    transition: "all 160ms ease",
+                  }}
+                >
+                  {t === "interview" ? "🎙️" : t === "deadline" ? "⏰" : "📧"} {t}
+                </button>
+              ))}
+            </div>
+
+            {/* Action buttons */}
+            <div style={{ display: "flex", gap: 8 }}>
+              <button
+                onClick={handleAdd}
+                disabled={!title.trim() || !date.trim() || !time.trim()}
+                style={{
+                  flex: 1, padding: "10px 0", borderRadius: 10, fontSize: 13, fontWeight: 700,
+                  background: "linear-gradient(135deg, #a78bfa, #8b5cf6)",
+                  border: "none", color: "#fff", cursor: "pointer",
+                  opacity: (!title.trim() || !date.trim() || !time.trim()) ? 0.5 : 1,
+                  transition: "opacity 160ms ease",
+                }}
+              >
+                Save Reminder
+              </button>
+              <button
+                onClick={() => { setShowForm(false); setTitle(""); setDate(""); setTime(""); }}
+                style={{
+                  width: 42, borderRadius: 10, fontSize: 16,
+                  background: "rgba(24,28,38,0.7)", border: "1px solid rgba(45,51,82,0.5)",
+                  color: "#a1a8c6", cursor: "pointer", transition: "all 160ms ease",
+                }}
+                onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.color = "#f87171"; (e.currentTarget as HTMLButtonElement).style.background = "rgba(248,113,113,0.15)"; }}
+                onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.color = "#a1a8c6"; (e.currentTarget as HTMLButtonElement).style.background = "rgba(24,28,38,0.7)"; }}
+              >✕</button>
+            </div>
+          </div>
+        ) : (
+          <button
+            onClick={() => setShowForm(true)}
+            style={{
+              width: "100%", padding: "16px 24px",
+              background: "linear-gradient(135deg, rgba(167,139,250,0.1), rgba(139,92,246,0.1))",
+              border: "2px dashed rgba(167,139,250,0.4)",
+              borderRadius: 16, color: "#a78bfa", fontSize: 15, fontWeight: 700,
+              cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 10,
+              transition: "all 250ms ease",
+            }}
+            onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.borderColor = "rgba(167,139,250,0.7)"; (e.currentTarget as HTMLButtonElement).style.background = "rgba(167,139,250,0.2)"; (e.currentTarget as HTMLButtonElement).style.transform = "scale(1.01)"; }}
+            onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.borderColor = "rgba(167,139,250,0.4)"; (e.currentTarget as HTMLButtonElement).style.background = "linear-gradient(135deg, rgba(167,139,250,0.1), rgba(139,92,246,0.1))"; (e.currentTarget as HTMLButtonElement).style.transform = "scale(1)"; }}
+          >⏰ Add Reminder</button>
+        )}
       </div>
     </AnimatedSection>
   );
