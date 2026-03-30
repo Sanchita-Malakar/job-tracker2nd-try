@@ -4,19 +4,21 @@
 //  DELETE → remove task
 // ============================================================
 
+
 import { NextResponse } from "next/server";
-import { supabase } from "@/lib/supabase";
+import { createClient } from "@/lib/supabase/server";
 
 interface Params { params: { taskId: string } }
 
 export async function PATCH(req: Request, { params }: Params) {
+  const supabase = await createClient();
   const { data: { user }, error: authErr } = await supabase.auth.getUser();
   if (authErr || !user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const body = await req.json();
   const patch: Record<string, unknown> = {};
-  if ("done" in body) patch.done = body.done;
-  if ("text" in body) patch.text = body.text;
+  if ("done"     in body) patch.done     = body.done;
+  if ("text"     in body) patch.text     = body.text;
   if ("due_date" in body) patch.due_date = body.due_date;
 
   const { data, error } = await supabase
@@ -32,6 +34,7 @@ export async function PATCH(req: Request, { params }: Params) {
 }
 
 export async function DELETE(_req: Request, { params }: Params) {
+  const supabase = await createClient();
   const { data: { user }, error: authErr } = await supabase.auth.getUser();
   if (authErr || !user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 

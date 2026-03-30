@@ -1,5 +1,6 @@
 "use client";
 import { useState, useEffect, useRef } from "react";
+import { useSession } from "@/components/SessionProvider";
 
 interface TopNavProps {
   onAddClick: () => void;
@@ -20,6 +21,7 @@ export default function TopNav({
   onDrawerOpen,
   isDrawerOpen = false,
 }: TopNavProps) {
+  const { profile } = useSession();
   const [notifOpen, setNotifOpen] = useState(false);
   const [addPulsed, setAddPulsed] = useState(false);
   const notifRef = useRef<HTMLDivElement>(null);
@@ -39,6 +41,19 @@ export default function TopNav({
   }, []);
 
   const sidebarW = sidebarOpen ? 240 : 68;
+
+  // Derive initials from profile name
+  const displayName = profile?.name || "User";
+  const initials = displayName
+    .split(" ")
+    .map((w: string) => w[0])
+    .join("")
+    .toUpperCase()
+    .slice(0, 2);
+
+  const handleProfileClick = () => {
+    window.dispatchEvent(new Event("profile:open"));
+  };
 
   return (
     <>
@@ -98,7 +113,7 @@ export default function TopNav({
         .tn-nidot { width:7px; height:7px; border-radius:50%; flex-shrink:0; margin-top:5px; }
         .tn-nitx { font-size:12.5px; color:#c4cadf; line-height:1.5; }
         .tn-nitm { font-size:11px; color:#6b7399; margin-top:1px; }
-        .tn-av { position: relative; z-index: 1; flex-shrink: 0; width: 42px; height: 42px; border-radius: 12px; background: linear-gradient(135deg,#4f8ef7 0%,#22d3ee 45%,#a78bfa 100%); border: 2px solid rgba(79,142,247,0.38); display: flex; align-items: center; justify-content: center; font-size: 13.5px; font-weight: 800; color: #fff; cursor: pointer; letter-spacing: 0.5px; box-shadow: 0 4px 14px rgba(79,142,247,0.3); transition: box-shadow 0.2s, transform 0.14s; }
+        .tn-av { position: relative; z-index: 1; flex-shrink: 0; width: 42px; height: 42px; border-radius: 12px; background: linear-gradient(135deg,#4f8ef7 0%,#22d3ee 45%,#a78bfa 100%); border: 2px solid rgba(79,142,247,0.38); display: flex; align-items: center; justify-content: center; font-size: 13.5px; font-weight: 800; color: #fff; cursor: pointer; letter-spacing: 0.5px; box-shadow: 0 4px 14px rgba(79,142,247,0.3); transition: box-shadow 0.2s, transform 0.14s; outline: none; }
         .tn-av:hover { box-shadow: 0 6px 22px rgba(79,142,247,0.52); transform: translateY(-1px) scale(1.04); }
         .tn-av:active { transform: scale(0.95); }
         .tn-online { position: absolute; bottom: 4px; right: 4px; width: 7px; height: 7px; border-radius: 50%; background: #22d3ee; border: 2px solid #0f1117; box-shadow: 0 0 7px #22d3ee; }
@@ -209,10 +224,17 @@ export default function TopNav({
           )}
         </div>
 
-        <div className="tn-av" role="button" aria-label="User profile" style={{ marginRight: 4 }}>
-          RD
+        {/* Dynamic avatar — click opens profile modal */}
+        <button
+          className="tn-av"
+          onClick={handleProfileClick}
+          aria-label="Edit profile"
+          title={`${displayName} — click to edit profile`}
+          style={{ marginRight: 4 }}
+        >
+          {initials || "U"}
           <span className="tn-online" />
-        </div>
+        </button>
       </header>
 
       <div style={{ height: 70, flexShrink: 0 }} />

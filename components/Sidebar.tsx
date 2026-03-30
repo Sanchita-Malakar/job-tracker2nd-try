@@ -1,10 +1,11 @@
 "use client";
 import { useState, useEffect } from "react";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import Link from "next/link";
-import type { PageSection } from "@/app/page"; // import the type
+import { useSession } from "@/components/SessionProvider";
+import { createClient } from "@/lib/supabase/client";
+import type { PageSection } from "@/app/page";
 
-// Items that control in-page sections (no real route change)
 const SECTION_ITEMS: {
   section: PageSection;
   label: string;
@@ -14,7 +15,6 @@ const SECTION_ITEMS: {
   { section: "applications", label: "Applications", icon: AppIcon  },
 ];
 
-// Items that are real Next.js routes
 const ROUTE_ITEMS = [
   { href: "/analytics", label: "Analytics", icon: ChartIcon },
   { href: "/resumes",   label: "Resumes",   icon: FileIcon  },
@@ -30,6 +30,8 @@ const W_CLOSED = 68;
 
 export default function Sidebar() {
   const pathname = usePathname();
+  const router   = useRouter();
+  const { profile } = useSession();
   const [mounted, setMounted] = useState(false);
   const [open, setOpen] = useState(true);
   const [activeSection, setActiveSection] = useState<PageSection>("dashboard");
@@ -45,7 +47,6 @@ export default function Sidebar() {
     return () => window.removeEventListener("sidebar:toggle", handleToggle);
   }, []);
 
-  // Keep active section in sync when page.tsx changes it internally
   useEffect(() => {
     const handler = (e: Event) => {
       const section = (e as CustomEvent<PageSection>).detail;
@@ -80,10 +81,33 @@ export default function Sidebar() {
     window.dispatchEvent(new CustomEvent<PageSection>("page:section", { detail: section }));
   };
 
+  const handleLogout = async () => {
+    const supabase = createClient();
+    await supabase.auth.signOut();
+    router.push("/login");
+    router.refresh();
+  };
+
+  const handleProfileClick = () => {
+    window.dispatchEvent(new Event("profile:open"));
+  };
+
   if (!mounted) return null;
 
-  // Are we on the main dashboard page (where sections live)?
   const isHomePage = pathname === "/" || pathname === "/dashboard" || pathname === "/applications";
+
+  // Derive display name & initials from profile
+  const displayName = profile?.name || "User";
+  const initials = displayName
+    .split(" ")
+    .map((w: string) => w[0])
+    .join("")
+    .toUpperCase()
+    .slice(0, 2);
+
+  const subLine = profile?.year_level
+    ? `${profile.department || ""} ${profile.year_level}`.trim()
+    : profile?.batch || profile?.department || profile?.college || "";
 
   return (
     <aside
@@ -108,7 +132,6 @@ export default function Sidebar() {
       <div style={{
         position: "absolute", inset: 0,
         overflow: "hidden",
-        borderRadius: 0,
         zIndex: 0,
         pointerEvents: "none",
       }}>
@@ -173,8 +196,6 @@ export default function Sidebar() {
         transition: "padding 0.35s cubic-bezier(0.4,0,0.2,1)",
         position: "relative", zIndex: 1,
       }}>
-
-        {/* Section items — Dashboard & Applications */}
         {SECTION_ITEMS.map(item => (
           <SectionNavItem
             key={item.section}
@@ -185,13 +206,11 @@ export default function Sidebar() {
           />
         ))}
 
-        {/* Divider */}
         <div style={{
           height: "1px", margin: "10px 4px",
           background: "linear-gradient(90deg,transparent,rgba(79,142,247,0.2),transparent)",
         }} />
 
-        {/* Real route items */}
         {ROUTE_ITEMS.map(item => (
           <NavItem
             key={item.href}
@@ -201,7 +220,6 @@ export default function Sidebar() {
           />
         ))}
 
-        {/* Divider */}
         <div style={{
           height: "1px", margin: "10px 4px",
           background: "linear-gradient(90deg,transparent,rgba(79,142,247,0.2),transparent)",
@@ -218,71 +236,123 @@ export default function Sidebar() {
       </nav>
 
       {/* ── User row ── */}
-      <div style={{
-        position: "relative", zIndex: 1,
-        display: "flex", alignItems: "center",
-        padding: open ? "14px 16px" : "14px 0",
-        justifyContent: "center",
-        borderTop: "1px solid rgba(255,255,255,0.05)",
-        flexShrink: 0, cursor: "pointer",
-        transition: "padding 0.35s cubic-bezier(0.4,0,0.2,1)",
-        overflow: "hidden",
-      }}>
-        <div style={{
-          width: "34px", height: "34px", borderRadius: "10px", flexShrink: 0,
-          background: "linear-gradient(135deg,#4f8ef7,#a78bfa)",
-          display: "flex", alignItems: "center", justifyContent: "center",
-          fontSize: "12px", fontWeight: 800, color: "#fff",
-          boxShadow: "0 0 14px rgba(79,142,247,0.35)",
-        }}>
-          RD
-        </div>
+      <div
+        style={{
+          position: "relative", zIndex: 1,
+          display: "flex", alignItems: "center",
+          padding: open ? "12px 14px" : "12px 0",
+          justifyContent: "center",
+          borderTop: "1px solid rgba(255,255,255,0.05)",
+          flexShrink: 0,
+          transition: "padding 0.35s cubic-bezier(0.4,0,0.2,1)",
+          overflow: "hidden",
+          gap: open ? "10px" : "0",
+        }}
+      >
+        {/* Avatar — click to open profile */}
+        <button
+          onClick={handleProfileClick}
+          title="Edit profile"
+          style={{
+            width: "34px", height: "34px", borderRadius: "10px", flexShrink: 0,
+            background: "linear-gradient(135deg,#4f8ef7,#a78bfa)",
+            display: "flex", alignItems: "center", justifyContent: "center",
+            fontSize: "12px", fontWeight: 800, color: "#fff",
+            boxShadow: "0 0 14px rgba(79,142,247,0.35)",
+            border: "none", cursor: "pointer",
+            transition: "box-shadow 0.2s, transform 0.15s",
+          }}
+          onMouseEnter={e => {
+            (e.currentTarget as HTMLButtonElement).style.boxShadow = "0 0 22px rgba(79,142,247,0.6)";
+            (e.currentTarget as HTMLButtonElement).style.transform = "scale(1.08)";
+          }}
+          onMouseLeave={e => {
+            (e.currentTarget as HTMLButtonElement).style.boxShadow = "0 0 14px rgba(79,142,247,0.35)";
+            (e.currentTarget as HTMLButtonElement).style.transform = "scale(1)";
+          }}
+        >
+          {initials || "U"}
+        </button>
 
+        {/* Name + sub info */}
         <div style={{
-          maxWidth: open ? "160px" : "0px",
+          maxWidth: open ? "120px" : "0px",
           opacity: open ? 1 : 0,
           overflow: "hidden",
-          marginLeft: open ? "12px" : "0px",
-          transition: "max-width 0.35s cubic-bezier(0.4,0,0.2,1), opacity 0.2s ease, margin-left 0.35s",
+          transition: "max-width 0.35s cubic-bezier(0.4,0,0.2,1), opacity 0.2s ease",
           pointerEvents: open ? "auto" : "none",
           flexShrink: 0,
-        }}>
-          <div style={{ fontSize: "13px", fontWeight: 600, color: "#e8eaf2", whiteSpace: "nowrap" }}>
-            Rahul Dev
+          flex: 1,
+          minWidth: 0,
+          cursor: "pointer",
+        }}
+        onClick={handleProfileClick}
+        >
+          <div style={{
+            fontSize: "13px", fontWeight: 600, color: "#e8eaf2",
+            whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
+          }}>
+            {displayName}
           </div>
-          <div style={{ fontSize: "11px", color: "rgba(255,255,255,0.38)", whiteSpace: "nowrap" }}>
-            B.Tech CSE &apos;25
-          </div>
+          {subLine && (
+            <div style={{
+              fontSize: "10px", color: "rgba(255,255,255,0.38)",
+              whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
+            }}>
+              {subLine}
+            </div>
+          )}
         </div>
 
+        {/* Logout + online dot when open */}
         {open && (
-          <div style={{
-            width: "7px", height: "7px", borderRadius: "50%",
-            background: "#22d3ee", boxShadow: "0 0 8px #22d3ee",
-            marginLeft: "auto", flexShrink: 0,
-            animation: "sb-pulse 2s ease-in-out infinite",
-          }} />
+          <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
+            <div style={{
+              width: "6px", height: "6px", borderRadius: "50%",
+              background: "#22d3ee", boxShadow: "0 0 8px #22d3ee",
+              animation: "sb-pulse 2s ease-in-out infinite",
+            }} />
+            <button
+              onClick={handleLogout}
+              title="Sign out"
+              style={{
+                width: 26, height: 26, borderRadius: 7, flexShrink: 0,
+                background: "transparent",
+                border: "1px solid rgba(255,255,255,0.08)",
+                color: "rgba(255,255,255,0.3)",
+                display: "flex", alignItems: "center", justifyContent: "center",
+                cursor: "pointer", fontSize: 12,
+                transition: "all 200ms ease",
+              }}
+              onMouseEnter={e => {
+                (e.currentTarget as HTMLButtonElement).style.background = "rgba(248,113,113,0.15)";
+                (e.currentTarget as HTMLButtonElement).style.borderColor = "rgba(248,113,113,0.4)";
+                (e.currentTarget as HTMLButtonElement).style.color = "#f87171";
+              }}
+              onMouseLeave={e => {
+                (e.currentTarget as HTMLButtonElement).style.background = "transparent";
+                (e.currentTarget as HTMLButtonElement).style.borderColor = "rgba(255,255,255,0.08)";
+                (e.currentTarget as HTMLButtonElement).style.color = "rgba(255,255,255,0.3)";
+              }}
+            >
+              ↪
+            </button>
+          </div>
         )}
       </div>
     </aside>
   );
 }
 
-/* ── Section NavItem (button, dispatches event, no route change) ── */
+/* ── Section NavItem ── */
 function SectionNavItem({
-  item,
-  active,
-  open,
-  onClick,
+  item, active, open, onClick,
 }: {
   item: { section: PageSection; label: string; icon: React.FC<{ size?: number; color?: string }> };
-  active: boolean;
-  open: boolean;
-  onClick: () => void;
+  active: boolean; open: boolean; onClick: () => void;
 }) {
   const [hovered, setHovered] = useState(false);
   const Icon = item.icon;
-
   return (
     <button
       onClick={onClick}
@@ -290,26 +360,20 @@ function SectionNavItem({
       onMouseLeave={() => setHovered(false)}
       title={!open ? item.label : undefined}
       style={{
-        display: "flex",
-        alignItems: "center",
+        display: "flex", alignItems: "center",
         justifyContent: open ? "flex-start" : "center",
-        height: "42px",
-        padding: open ? "0 12px" : "0",
+        height: "42px", padding: open ? "0 12px" : "0",
         borderRadius: "10px",
         border: active ? "1px solid rgba(79,142,247,0.25)" : "1px solid transparent",
         background: active
           ? "linear-gradient(90deg,rgba(79,142,247,0.18),rgba(167,139,250,0.08))"
           : hovered ? "rgba(255,255,255,0.04)" : "transparent",
-        width: "100%",
-        boxSizing: "border-box",
-        cursor: "pointer",
-        position: "relative",
-        overflow: "visible",
+        width: "100%", boxSizing: "border-box", cursor: "pointer",
+        position: "relative", overflow: "visible",
         transition: "background 0.2s, border-color 0.2s, padding 0.35s cubic-bezier(0.4,0,0.2,1)",
         textAlign: "left",
       }}
     >
-      {/* Active bar */}
       {active && (
         <div style={{
           position: "absolute", left: 0, top: "20%", bottom: "20%",
@@ -318,73 +382,44 @@ function SectionNavItem({
           boxShadow: "0 0 8px #4f8ef790",
         }} />
       )}
-
-      {/* Active section indicator dot on icon when collapsed */}
       {active && !open && (
         <div style={{
-          position: "absolute",
-          top: 6, right: 6,
-          width: 6, height: 6,
-          borderRadius: "50%",
-          background: "#4f8ef7",
-          boxShadow: "0 0 6px #4f8ef7",
-          zIndex: 2,
+          position: "absolute", top: 6, right: 6,
+          width: 6, height: 6, borderRadius: "50%",
+          background: "#4f8ef7", boxShadow: "0 0 6px #4f8ef7", zIndex: 2,
         }} />
       )}
-
       <span style={{
-        flexShrink: 0,
-        display: "flex", alignItems: "center", justifyContent: "center",
-        width: "22px", height: "22px",
-        transition: "transform 0.2s",
-        transform: hovered && !active ? "scale(1.12)" : "scale(1)",
-        zIndex: 1,
+        flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center",
+        width: "22px", height: "22px", transition: "transform 0.2s",
+        transform: hovered && !active ? "scale(1.12)" : "scale(1)", zIndex: 1,
       }}>
-        <Icon
-          size={18}
-          color={active ? "#4f8ef7" : hovered ? "#c4cadf" : "#6b7399"}
-        />
+        <Icon size={18} color={active ? "#4f8ef7" : hovered ? "#c4cadf" : "#6b7399"} />
       </span>
-
       <span style={{
-        fontSize: "13px",
-        fontWeight: active ? 600 : 500,
+        fontSize: "13px", fontWeight: active ? 600 : 500,
         color: active ? "#e8eaf2" : hovered ? "#c4cadf" : "#6b7399",
-        whiteSpace: "nowrap",
-        overflow: "hidden",
-        maxWidth: open ? "180px" : "0px",
-        opacity: open ? 1 : 0,
+        whiteSpace: "nowrap", overflow: "hidden",
+        maxWidth: open ? "180px" : "0px", opacity: open ? 1 : 0,
         marginLeft: open ? "12px" : "0px",
         transition: "max-width 0.3s cubic-bezier(0.4,0,0.2,1), opacity 0.2s ease, margin-left 0.3s, color 0.2s",
         pointerEvents: "none",
       }}>
         {item.label}
       </span>
-
-      {hovered && (
-        <div style={{
-          position: "absolute", inset: 0, borderRadius: "10px",
-          background: "linear-gradient(90deg,transparent,rgba(255,255,255,0.04) 50%,transparent)",
-          pointerEvents: "none",
-        }} />
-      )}
     </button>
   );
 }
 
-/* ── Route NavItem (Link, navigates) ── */
+/* ── Route NavItem ── */
 function NavItem({
-  item,
-  active,
-  open,
+  item, active, open,
 }: {
   item: { href: string; label: string; icon: React.FC<{ size?: number; color?: string }> };
-  active: boolean;
-  open: boolean;
+  active: boolean; open: boolean;
 }) {
   const [hovered, setHovered] = useState(false);
   const Icon = item.icon;
-
   return (
     <Link
       href={item.href}
@@ -392,22 +427,17 @@ function NavItem({
       onMouseLeave={() => setHovered(false)}
       title={!open ? item.label : undefined}
       style={{
-        display: "flex",
-        alignItems: "center",
+        display: "flex", alignItems: "center",
         justifyContent: open ? "flex-start" : "center",
-        height: "42px",
-        padding: open ? "0 12px" : "0",
-        borderRadius: "10px",
-        textDecoration: "none",
-        position: "relative",
-        overflow: "visible",
+        height: "42px", padding: open ? "0 12px" : "0",
+        borderRadius: "10px", textDecoration: "none",
+        position: "relative", overflow: "visible",
         background: active
           ? "linear-gradient(90deg,rgba(79,142,247,0.18),rgba(167,139,250,0.08))"
           : hovered ? "rgba(255,255,255,0.04)" : "transparent",
         border: active ? "1px solid rgba(79,142,247,0.25)" : "1px solid transparent",
         transition: "background 0.2s, border-color 0.2s, padding 0.35s cubic-bezier(0.4,0,0.2,1)",
-        width: "100%",
-        boxSizing: "border-box",
+        width: "100%", boxSizing: "border-box",
       }}
     >
       {active && (
@@ -418,43 +448,24 @@ function NavItem({
           boxShadow: "0 0 8px #4f8ef790",
         }} />
       )}
-
       <span style={{
-        flexShrink: 0,
-        display: "flex", alignItems: "center", justifyContent: "center",
-        width: "22px", height: "22px",
-        transition: "transform 0.2s",
-        transform: hovered && !active ? "scale(1.12)" : "scale(1)",
-        zIndex: 1,
+        flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center",
+        width: "22px", height: "22px", transition: "transform 0.2s",
+        transform: hovered && !active ? "scale(1.12)" : "scale(1)", zIndex: 1,
       }}>
-        <Icon
-          size={18}
-          color={active ? "#4f8ef7" : hovered ? "#c4cadf" : "#6b7399"}
-        />
+        <Icon size={18} color={active ? "#4f8ef7" : hovered ? "#c4cadf" : "#6b7399"} />
       </span>
-
       <span style={{
-        fontSize: "13px",
-        fontWeight: active ? 600 : 500,
+        fontSize: "13px", fontWeight: active ? 600 : 500,
         color: active ? "#e8eaf2" : hovered ? "#c4cadf" : "#6b7399",
-        whiteSpace: "nowrap",
-        overflow: "hidden",
-        maxWidth: open ? "180px" : "0px",
-        opacity: open ? 1 : 0,
+        whiteSpace: "nowrap", overflow: "hidden",
+        maxWidth: open ? "180px" : "0px", opacity: open ? 1 : 0,
         marginLeft: open ? "12px" : "0px",
         transition: "max-width 0.3s cubic-bezier(0.4,0,0.2,1), opacity 0.2s ease, margin-left 0.3s, color 0.2s",
         pointerEvents: "none",
       }}>
         {item.label}
       </span>
-
-      {hovered && (
-        <div style={{
-          position: "absolute", inset: 0, borderRadius: "10px",
-          background: "linear-gradient(90deg,transparent,rgba(255,255,255,0.04) 50%,transparent)",
-          pointerEvents: "none",
-        }} />
-      )}
     </Link>
   );
 }

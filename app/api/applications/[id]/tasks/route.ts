@@ -4,19 +4,22 @@
 //  POST   → create task
 // ============================================================
 
+// app/api/applications/[id]/tasks/route.ts
 import { NextResponse } from "next/server";
-import { supabase } from "@/lib/supabase";
+import { createClient } from "@/lib/supabase/server";
 
-interface Params { params: { id: string } }
+interface Params { params: Promise<{ id: string }> }
 
 export async function GET(_req: Request, { params }: Params) {
+  const { id } = await params;
+  const supabase = await createClient();
   const { data: { user }, error: authErr } = await supabase.auth.getUser();
   if (authErr || !user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const { data, error } = await supabase
     .from("tasks")
     .select("*")
-    .eq("application_id", Number(params.id))
+    .eq("application_id", Number(id))
     .eq("user_id", user.id)
     .order("created_at", { ascending: true });
 
@@ -25,6 +28,8 @@ export async function GET(_req: Request, { params }: Params) {
 }
 
 export async function POST(req: Request, { params }: Params) {
+  const { id } = await params;
+  const supabase = await createClient();
   const { data: { user }, error: authErr } = await supabase.auth.getUser();
   if (authErr || !user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
@@ -34,7 +39,7 @@ export async function POST(req: Request, { params }: Params) {
   const { data, error } = await supabase
     .from("tasks")
     .insert({
-      application_id: Number(params.id),
+      application_id: Number(id),
       user_id: user.id,
       text,
       due_date: due_date ?? null,

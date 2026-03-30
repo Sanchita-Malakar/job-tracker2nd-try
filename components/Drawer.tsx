@@ -3,12 +3,7 @@ import { useState, useEffect, useRef } from "react";
 import type { Application } from "@/types";
 
 const STATUS_COLORS: Record<string, {
-  dot: string;
-  bg: string;
-  text: string;
-  border: string;
-  gradient: string;
-  shadow: string;
+  dot: string; bg: string; text: string; border: string; gradient: string; shadow: string;
 }> = {
   Applied:   { dot: "#fbbf24", bg: "rgba(251,191,36,0.12)",  text: "#fbbf24", border: "rgba(251,191,36,0.3)",  gradient: "from-[#fbbf24]/10 to-[#fbbf24]/5", shadow: "0 4px 16px rgba(251,191,36,0.3)"  },
   OA:        { dot: "#22d3ee", bg: "rgba(34,211,238,0.12)",  text: "#22d3ee", border: "rgba(34,211,238,0.3)",  gradient: "from-[#22d3ee]/10 to-[#22d3ee]/5", shadow: "0 4px 16px rgba(34,211,238,0.3)"  },
@@ -21,16 +16,22 @@ interface Task {
   id: number;
   text: string;
   done: boolean;
+  due_date?: string | null;
+  // legacy field from old code — handle both shapes
   dueDate?: string;
 }
 
 interface AppFile {
   id: number;
   name: string;
-  icon: string;
-  size: string;
-  type: string;
-  uploadedAt: string;
+  file_type: string;
+  size_bytes: number;
+  uploaded_at: string;
+  // legacy fields (old mock shape)
+  icon?: string;
+  size?: string;
+  type?: string;
+  uploadedAt?: string;
 }
 
 interface Reminder {
@@ -49,22 +50,37 @@ interface DrawerProps {
   onUpdateApp?: (updatedApp: Partial<Application>) => void;
 }
 
+// ── helpers ──────────────────────────────────────────────────
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function fileIcon(type: string): string {
+  if (type === "pdf") return "📄";
+  if (type === "image") return "🖼️";
+  return "📁";
+}
+
 export default function Drawer({ app, onClose, onUpdateApp }: DrawerProps) {
-  const [tasks,     setTasks]     = useState<Task[]>([]);
-  const [notes,     setNotes]     = useState("");
-  const [files,     setFiles]     = useState<AppFile[]>([]);
-  const [reminders, setReminders] = useState<Reminder[]>([]);
-  const [showAddTask,  setShowAddTask]  = useState(false);
-  const [newTaskText,  setNewTaskText]  = useState("");
-  const [activeTab,    setActiveTab]    = useState<"tasks" | "files" | "notes" | "reminders">("tasks");
+  const [tasks,         setTasks]         = useState<Task[]>([]);
+  const [notes,         setNotes]         = useState("");
+  const [notesSaving,   setNotesSaving]   = useState(false);
+  const [notesSaved,    setNotesSaved]    = useState(false);
+  const [files,         setFiles]         = useState<AppFile[]>([]);
+  const [reminders,     setReminders]     = useState<Reminder[]>([]);
+  const [showAddTask,   setShowAddTask]   = useState(false);
+  const [newTaskText,   setNewTaskText]   = useState("");
+  const [activeTab,     setActiveTab]     = useState<"tasks" | "files" | "notes" | "reminders">("tasks");
 
   // Animation state
-  const [mounted,      setMounted]      = useState(false);
-  const [visible,      setVisible]      = useState(false);
-  const [contentReady, setContentReady] = useState(false);
+  const [mounted,       setMounted]       = useState(false);
+  const [visible,       setVisible]       = useState(false);
+  const [contentReady,  setContentReady]  = useState(false);
   const prevApp = useRef<Application | null>(null);
 
-  // ── Open / close animation ───────────────────────────────────
+  // ── Open / close animation ───────────────────────────────
   useEffect(() => {
     if (app) {
       setMounted(true);
@@ -84,35 +100,28 @@ export default function Drawer({ app, onClose, onUpdateApp }: DrawerProps) {
     }
   }, [app]);
 
-  // ── Fetch all data from API when app changes ─────────────────
-  // Runs every time a different card is opened.
+  // ── Fetch all data from API when app changes ─────────────
   useEffect(() => {
     if (!app) return;
 
-    // Always sync notes from the app prop (saved in applications table)
     setNotes(app.notes || "");
-
-    // Clear stale data immediately so previous app's data doesn't flash
+    setNotesSaved(false);
     setTasks([]);
     setFiles([]);
     setReminders([]);
 
     const id = app.id;
 
-    // Fetch tasks
     fetch(`/api/applications/${id}/tasks`)
       .then(r => r.ok ? r.json() : [])
       .then((data: Task[]) => setTasks(data))
       .catch(() => setTasks([]));
 
-    // Fetch files metadata
     fetch(`/api/applications/${id}/files`)
       .then(r => r.ok ? r.json() : [])
       .then((data: AppFile[]) => setFiles(data))
       .catch(() => setFiles([]));
 
-    // ── REMINDERS — the calls you asked about ────────────────────
-    // GET /api/applications/:id/reminders
     fetch(`/api/applications/${id}/reminders`)
       .then(r => r.ok ? r.json() : [])
       .then((data: Reminder[]) => setReminders(data))
@@ -120,11 +129,10 @@ export default function Drawer({ app, onClose, onUpdateApp }: DrawerProps) {
 
   }, [app]);
 
-  // ── Tasks — PATCH toggle, POST add, DELETE remove ────────────
+  // ── Tasks ─────────────────────────────────────────────────
   const toggleTask = async (id: number) => {
     const task = tasks.find(t => t.id === id);
     if (!task) return;
-    // Optimistic update
     setTasks(prev => prev.map(t => t.id === id ? { ...t, done: !t.done } : t));
     try {
       await fetch(`/api/tasks/${id}`, {
@@ -133,7 +141,6 @@ export default function Drawer({ app, onClose, onUpdateApp }: DrawerProps) {
         body: JSON.stringify({ done: !task.done }),
       });
     } catch {
-      // Rollback on failure
       setTasks(prev => prev.map(t => t.id === id ? { ...t, done: task.done } : t));
     }
   };
@@ -142,9 +149,8 @@ export default function Drawer({ app, onClose, onUpdateApp }: DrawerProps) {
     if (!newTaskText.trim() || !app) return;
     const dueDate = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000)
       .toLocaleDateString("en-GB", { day: "2-digit", month: "short" });
-    // Optimistic insert
     const tempId = Date.now();
-    setTasks(prev => [{ id: tempId, text: newTaskText.trim(), done: false, dueDate }, ...prev]);
+    setTasks(prev => [{ id: tempId, text: newTaskText.trim(), done: false, due_date: dueDate }, ...prev]);
     setNewTaskText("");
     setShowAddTask(false);
     try {
@@ -155,7 +161,6 @@ export default function Drawer({ app, onClose, onUpdateApp }: DrawerProps) {
       });
       if (res.ok) {
         const created: Task = await res.json();
-        // Replace temp id with real DB id
         setTasks(prev => prev.map(t => t.id === tempId ? created : t));
       }
     } catch {
@@ -164,22 +169,74 @@ export default function Drawer({ app, onClose, onUpdateApp }: DrawerProps) {
   };
 
   const deleteTask = async (id: number) => {
-    setTasks(prev => prev.filter(t => t.id !== id));   // optimistic
+    setTasks(prev => prev.filter(t => t.id !== id));
     await fetch(`/api/tasks/${id}`, { method: "DELETE" }).catch(() => {});
   };
 
-  // ── Files — DELETE remove ────────────────────────────────────
+  // ── Notes — PATCH to API ──────────────────────────────────
+  const saveNotes = async () => {
+    if (!app) return;
+    setNotesSaving(true);
+    setNotesSaved(false);
+    try {
+      const res = await fetch(`/api/applications/${app.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ notes }),
+      });
+      if (res.ok) {
+        const updated = await res.json();
+        onUpdateApp?.({ notes: updated.notes });
+        setNotesSaved(true);
+        setTimeout(() => setNotesSaved(false), 2500);
+      }
+    } catch {
+      // silently fail
+    } finally {
+      setNotesSaving(false);
+    }
+  };
+
+  // ── Files — Upload via FormData POST, DELETE ──────────────
+  const uploadFile = async (file: File) => {
+    if (!app) return;
+    const formData = new FormData();
+    formData.append("file", file);
+    try {
+      const res = await fetch(`/api/applications/${app.id}/files`, {
+        method: "POST",
+        body: formData,
+      });
+      if (res.ok) {
+        const created: AppFile = await res.json();
+        setFiles(prev => [created, ...prev]);
+      }
+    } catch {
+      // silently fail
+    }
+  };
+
   const deleteFile = async (id: number) => {
-    setFiles(prev => prev.filter(f => f.id !== id));   // optimistic
+    setFiles(prev => prev.filter(f => f.id !== id));
     await fetch(`/api/files/${id}`, { method: "DELETE" }).catch(() => {});
   };
 
-  // ── Reminders — POST add, DELETE remove ─────────────────────
-  // POST /api/applications/:id/reminders
+  const viewFile = async (id: number) => {
+    try {
+      const res = await fetch(`/api/files/${id}`);
+      if (res.ok) {
+        const { url } = await res.json();
+        window.open(url, "_blank", "noopener,noreferrer");
+      }
+    } catch {
+      // silently fail
+    }
+  };
+
+  // ── Reminders — POST add, DELETE remove ──────────────────
   const addReminder = async (reminder: Omit<Reminder, "id">) => {
     if (!app) return;
     const tempId = Date.now();
-    // Optimistic insert
     setReminders(prev => [...prev, { ...reminder, id: tempId }]);
     try {
       const res = await fetch(`/api/applications/${app.id}/reminders`, {
@@ -196,9 +253,8 @@ export default function Drawer({ app, onClose, onUpdateApp }: DrawerProps) {
     }
   };
 
-  // DELETE /api/reminders/:reminderId
   const deleteReminder = async (id: number) => {
-    setReminders(prev => prev.filter(r => r.id !== id));   // optimistic
+    setReminders(prev => prev.filter(r => r.id !== id));
     await fetch(`/api/reminders/${id}`, { method: "DELETE" }).catch(() => {});
   };
 
@@ -214,9 +270,7 @@ export default function Drawer({ app, onClose, onUpdateApp }: DrawerProps) {
       <div
         onClick={onClose}
         style={{
-          position: "fixed",
-          inset: 0,
-          zIndex: 95,
+          position: "fixed", inset: 0, zIndex: 95,
           backdropFilter: visible ? "blur(12px)" : "blur(0px)",
           background: visible
             ? "linear-gradient(to bottom, rgba(0,0,0,0.5), rgba(0,0,0,0.75))"
@@ -230,14 +284,9 @@ export default function Drawer({ app, onClose, onUpdateApp }: DrawerProps) {
       {/* Drawer panel */}
       <aside
         style={{
-          position: "fixed",
-          top: 70,
-          right: 0,
-          height: "calc(100vh - 70px)",
-          width: 440,
-          zIndex: 100,
-          display: "flex",
-          flexDirection: "column",
+          position: "fixed", top: 70, right: 0,
+          height: "calc(100vh - 70px)", width: 440, zIndex: 100,
+          display: "flex", flexDirection: "column",
           background: "linear-gradient(135deg, rgba(19,22,30,0.97) 0%, rgba(15,17,23,0.97) 50%, rgba(10,12,16,0.97) 100%)",
           borderLeft: "1px solid rgba(45,51,82,0.6)",
           boxShadow: visible
@@ -250,26 +299,18 @@ export default function Drawer({ app, onClose, onUpdateApp }: DrawerProps) {
           overflow: "hidden",
         }}
       >
-        {/* Subtle top shimmer line */}
+        {/* Top shimmer */}
         <div style={{
-          position: "absolute",
-          top: 0,
-          left: 0,
-          right: 0,
-          height: 1,
+          position: "absolute", top: 0, left: 0, right: 0, height: 1,
           background: "linear-gradient(90deg, transparent, rgba(79,142,247,0.5), rgba(167,139,250,0.5), transparent)",
           opacity: visible ? 1 : 0,
           transition: "opacity 600ms ease 200ms",
         }} />
 
-        {/* Animated glow orb behind content */}
+        {/* Glow orb */}
         <div style={{
-          position: "absolute",
-          top: -60,
-          right: -60,
-          width: 300,
-          height: 300,
-          borderRadius: "50%",
+          position: "absolute", top: -60, right: -60,
+          width: 300, height: 300, borderRadius: "50%",
           background: `radial-gradient(circle, ${c.dot}18 0%, transparent 70%)`,
           pointerEvents: "none",
           transition: "background 600ms ease",
@@ -277,31 +318,23 @@ export default function Drawer({ app, onClose, onUpdateApp }: DrawerProps) {
         }} />
 
         {/* ── Header ── */}
-        <div
-          style={{
-            padding: "24px 28px 22px",
-            borderBottom: "1px solid rgba(35,40,64,0.6)",
-            background: "linear-gradient(to right, rgba(19,22,30,0.95), rgba(24,28,38,0.95))",
-            backdropFilter: "blur(20px)",
-            flexShrink: 0,
-            transform: contentReady ? "translateY(0)" : "translateY(-10px)",
-            opacity: contentReady ? 1 : 0,
-            transition: "transform 300ms cubic-bezier(0.34,1.56,0.64,1) 60ms, opacity 280ms ease 60ms",
-          }}
-        >
+        <div style={{
+          padding: "24px 28px 22px",
+          borderBottom: "1px solid rgba(35,40,64,0.6)",
+          background: "linear-gradient(to right, rgba(19,22,30,0.95), rgba(24,28,38,0.95))",
+          backdropFilter: "blur(20px)", flexShrink: 0,
+          transform: contentReady ? "translateY(0)" : "translateY(-10px)",
+          opacity: contentReady ? 1 : 0,
+          transition: "transform 300ms cubic-bezier(0.34,1.56,0.64,1) 60ms, opacity 280ms ease 60ms",
+        }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
             <div>
-              <div
-                className="font-['Syne']"
-                style={{
-                  fontSize: 22,
-                  fontWeight: 900,
-                  background: "linear-gradient(90deg, #4f8ef7, #22d3ee, #a78bfa)",
-                  WebkitBackgroundClip: "text",
-                  WebkitTextFillColor: "transparent",
-                  filter: "drop-shadow(0 2px 8px rgba(79,142,247,0.4))",
-                }}
-              >
+              <div className="font-['Syne']" style={{
+                fontSize: 22, fontWeight: 900,
+                background: "linear-gradient(90deg, #4f8ef7, #22d3ee, #a78bfa)",
+                WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent",
+                filter: "drop-shadow(0 2px 8px rgba(79,142,247,0.4))",
+              }}>
                 {app?.company}
               </div>
               <div style={{ fontSize: 14, color: "#a1a8c6", marginTop: 4, fontWeight: 600, display: "flex", alignItems: "center", gap: 8 }}>
@@ -316,15 +349,13 @@ export default function Drawer({ app, onClose, onUpdateApp }: DrawerProps) {
                 style={{
                   padding: "8px 16px",
                   background: "linear-gradient(135deg, rgba(52,211,153,0.2), rgba(16,185,129,0.2))",
-                  border: "1px solid rgba(52,211,153,0.4)",
-                  color: "#34d399",
-                  fontSize: 13,
-                  fontWeight: 700,
-                  borderRadius: 12,
-                  cursor: "pointer",
+                  border: "1px solid rgba(52,211,153,0.4)", color: "#34d399",
+                  fontSize: 13, fontWeight: 700, borderRadius: 12, cursor: "pointer",
                   transition: "all 200ms ease",
+                  opacity: (app?.status === "Offer" || app?.status === "Rejected") ? 0.4 : 1,
                 }}
                 onMouseEnter={e => {
+                  if (app?.status === "Offer" || app?.status === "Rejected") return;
                   (e.currentTarget as HTMLButtonElement).style.background = "linear-gradient(135deg, rgba(52,211,153,0.35), rgba(16,185,129,0.35))";
                   (e.currentTarget as HTMLButtonElement).style.boxShadow = "0 4px 20px rgba(52,211,153,0.3)";
                 }}
@@ -332,72 +363,49 @@ export default function Drawer({ app, onClose, onUpdateApp }: DrawerProps) {
                   (e.currentTarget as HTMLButtonElement).style.background = "linear-gradient(135deg, rgba(52,211,153,0.2), rgba(16,185,129,0.2))";
                   (e.currentTarget as HTMLButtonElement).style.boxShadow = "none";
                 }}
-              >
-                🎉 Offer
-              </button>
+              >🎉 Offer</button>
               <button
                 onClick={onClose}
                 style={{
-                  width: 44,
-                  height: 44,
-                  borderRadius: 14,
-                  background: "rgba(24,28,38,0.7)",
-                  border: "2px solid rgba(45,51,82,0.6)",
-                  color: "#a1a8c6",
-                  fontSize: 18,
-                  cursor: "pointer",
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
+                  width: 44, height: 44, borderRadius: 14,
+                  background: "rgba(24,28,38,0.7)", border: "2px solid rgba(45,51,82,0.6)",
+                  color: "#a1a8c6", fontSize: 18, cursor: "pointer",
+                  display: "flex", alignItems: "center", justifyContent: "center",
                   transition: "all 200ms ease",
                 }}
                 onMouseEnter={e => {
                   (e.currentTarget as HTMLButtonElement).style.background = "rgba(79,142,247,0.3)";
                   (e.currentTarget as HTMLButtonElement).style.color = "#4f8ef7";
                   (e.currentTarget as HTMLButtonElement).style.borderColor = "rgba(79,142,247,0.5)";
-                  (e.currentTarget as HTMLButtonElement).style.boxShadow = "0 0 20px rgba(79,142,247,0.3)";
                   (e.currentTarget as HTMLButtonElement).style.transform = "rotate(90deg) scale(1.1)";
                 }}
                 onMouseLeave={e => {
                   (e.currentTarget as HTMLButtonElement).style.background = "rgba(24,28,38,0.7)";
                   (e.currentTarget as HTMLButtonElement).style.color = "#a1a8c6";
                   (e.currentTarget as HTMLButtonElement).style.borderColor = "rgba(45,51,82,0.6)";
-                  (e.currentTarget as HTMLButtonElement).style.boxShadow = "none";
                   (e.currentTarget as HTMLButtonElement).style.transform = "rotate(0deg) scale(1)";
                 }}
-              >
-                ✕
-              </button>
+              >✕</button>
             </div>
           </div>
         </div>
 
         {/* ── Status & Tabs ── */}
-        <div
-          style={{
-            padding: "20px 28px",
-            borderBottom: "1px solid rgba(35,40,64,0.5)",
-            flexShrink: 0,
-            transform: contentReady ? "translateY(0)" : "translateY(-8px)",
-            opacity: contentReady ? 1 : 0,
-            transition: "transform 300ms cubic-bezier(0.34,1.56,0.64,1) 100ms, opacity 280ms ease 100ms",
-          }}
-        >
+        <div style={{
+          padding: "20px 28px",
+          borderBottom: "1px solid rgba(35,40,64,0.5)", flexShrink: 0,
+          transform: contentReady ? "translateY(0)" : "translateY(-8px)",
+          opacity: contentReady ? 1 : 0,
+          transition: "transform 300ms cubic-bezier(0.34,1.56,0.64,1) 100ms, opacity 280ms ease 100ms",
+        }}>
           <div style={{ display: "flex", alignItems: "center", gap: 16, marginBottom: 16 }}>
             <div style={{ width: 12, height: 12, borderRadius: "50%", background: c.dot, boxShadow: `0 0 20px ${c.dot}60` }} />
             <span style={{ fontSize: 14, color: "#a1a8c6", fontWeight: 600 }}>Status:</span>
             <div style={{
-              padding: "8px 18px",
-              borderRadius: 14,
-              border: `2px solid ${c.border}`,
-              background: c.bg,
-              color: c.text,
-              boxShadow: c.shadow,
-              fontWeight: 700,
-              fontSize: 13,
-              textTransform: "uppercase",
-              letterSpacing: "0.05em",
-              backdropFilter: "blur(8px)",
+              padding: "8px 18px", borderRadius: 14,
+              border: `2px solid ${c.border}`, background: c.bg, color: c.text,
+              boxShadow: c.shadow, fontWeight: 700, fontSize: 13,
+              textTransform: "uppercase", letterSpacing: "0.05em", backdropFilter: "blur(8px)",
             }}>
               {app?.status === "OA" ? "Online Assessment" : app?.status}
             </div>
@@ -406,43 +414,28 @@ export default function Drawer({ app, onClose, onUpdateApp }: DrawerProps) {
           {/* Tabs */}
           <div style={{
             display: "flex",
-            background: "rgba(24,28,38,0.5)",
-            border: "1px solid rgba(45,51,82,0.5)",
-            borderRadius: 16,
-            padding: 4,
-            backdropFilter: "blur(8px)",
+            background: "rgba(24,28,38,0.5)", border: "1px solid rgba(45,51,82,0.5)",
+            borderRadius: 16, padding: 4, backdropFilter: "blur(8px)",
           }}>
             {([
               { id: "tasks"     as const, label: `Tasks ${completedTasks}/${tasks.length}`, icon: "✅" },
               { id: "files"     as const, label: `Files ${files.length}`,                   icon: "📁" },
               { id: "notes"     as const, label: "Notes",                                   icon: "📝" },
               { id: "reminders" as const, label: `Reminders ${reminders.length}`,           icon: "🔔" },
-            ]).map((tab, i) => (
+            ]).map(tab => (
               <button
                 key={tab.id}
                 onClick={() => setActiveTab(tab.id)}
                 style={{
-                  flex: 1,
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  gap: 6,
-                  padding: "10px 12px",
-                  borderRadius: 12,
-                  fontSize: 12,
-                  fontWeight: 700,
-                  border: "none",
-                  cursor: "pointer",
-                  background: activeTab === tab.id
-                    ? "linear-gradient(135deg, #4f8ef7, #a78bfa)"
-                    : "transparent",
+                  flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
+                  padding: "10px 12px", borderRadius: 12, fontSize: 12, fontWeight: 700,
+                  border: "none", cursor: "pointer",
+                  background: activeTab === tab.id ? "linear-gradient(135deg, #4f8ef7, #a78bfa)" : "transparent",
                   color: activeTab === tab.id ? "#fff" : "#a1a8c6",
                   boxShadow: activeTab === tab.id ? "0 4px 16px rgba(79,142,247,0.35)" : "none",
                   transform: activeTab === tab.id ? "scale(1.04)" : "scale(1)",
                   transition: "all 220ms cubic-bezier(0.34,1.56,0.64,1)",
-                  whiteSpace: "nowrap",
-                  overflow: "hidden",
-                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
                 }}
               >
                 <span style={{ fontSize: 14 }}>{tab.icon}</span>
@@ -453,25 +446,18 @@ export default function Drawer({ app, onClose, onUpdateApp }: DrawerProps) {
         </div>
 
         {/* ── Scrollable Content ── */}
-        <div
-          style={{
-            flex: 1,
-            overflowY: "auto",
-            padding: "24px 28px",
-            scrollbarWidth: "none",
-            opacity: contentReady ? 1 : 0,
-            transform: contentReady ? "translateY(0)" : "translateY(16px)",
-            transition: "opacity 360ms ease 160ms, transform 360ms cubic-bezier(0.34,1.2,0.64,1) 160ms",
-          }}
-        >
+        <div style={{
+          flex: 1, overflowY: "auto", padding: "24px 28px", scrollbarWidth: "none",
+          opacity: contentReady ? 1 : 0,
+          transform: contentReady ? "translateY(0)" : "translateY(16px)",
+          transition: "opacity 360ms ease 160ms, transform 360ms cubic-bezier(0.34,1.2,0.64,1) 160ms",
+        }}>
           {/* Timeline */}
           <AnimatedSection title="📅 Timeline" delay={0} contentReady={contentReady}>
             <div style={{ display: "flex", flexDirection: "column", gap: 0 }}>
               {TIMELINE_STAGES.map((stage, i) => {
                 const done = i <= currentStageIdx && app?.status !== "Rejected";
-                return (
-                  <TimelineRow key={stage} stage={stage} done={done} i={i} total={TIMELINE_STAGES.length} app={app} />
-                );
+                return <TimelineRow key={stage} stage={stage} done={done} i={i} total={TIMELINE_STAGES.length} app={app} />;
               })}
             </div>
           </AnimatedSection>
@@ -492,9 +478,33 @@ export default function Drawer({ app, onClose, onUpdateApp }: DrawerProps) {
                 contentReady={contentReady}
               />
             )}
-            {activeTab === "files"     && <FilesTab files={files} onDelete={deleteFile} contentReady={contentReady} />}
-            {activeTab === "notes"     && <NotesTab notes={notes} onChange={setNotes} contentReady={contentReady} />}
-            {activeTab === "reminders" && <RemindersTab reminders={reminders} onDelete={deleteReminder} onAdd={addReminder} contentReady={contentReady} />}
+            {activeTab === "files" && (
+              <FilesTab
+                files={files}
+                onDelete={deleteFile}
+                onView={viewFile}
+                onUpload={uploadFile}
+                contentReady={contentReady}
+              />
+            )}
+            {activeTab === "notes" && (
+              <NotesTab
+                notes={notes}
+                onChange={setNotes}
+                onSave={saveNotes}
+                saving={notesSaving}
+                saved={notesSaved}
+                contentReady={contentReady}
+              />
+            )}
+            {activeTab === "reminders" && (
+              <RemindersTab
+                reminders={reminders}
+                onDelete={deleteReminder}
+                onAdd={addReminder}
+                contentReady={contentReady}
+              />
+            )}
           </div>
         </div>
       </aside>
@@ -507,10 +517,6 @@ export default function Drawer({ app, onClose, onUpdateApp }: DrawerProps) {
         @keyframes scaleIn {
           from { opacity: 0; transform: scale(0.92); }
           to   { opacity: 1; transform: scale(1); }
-        }
-        @keyframes shimmer {
-          0%   { background-position: -400px 0; }
-          100% { background-position: 400px 0; }
         }
       `}</style>
     </>
@@ -527,10 +533,7 @@ function TimelineRow({ stage, done, i, total, app }: {
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
       style={{
-        display: "flex",
-        alignItems: "flex-start",
-        gap: 20,
-        padding: "12px 12px",
+        display: "flex", alignItems: "flex-start", gap: 20, padding: "12px 12px",
         borderRadius: 12,
         background: hovered ? "rgba(24,28,38,0.6)" : "transparent",
         transition: "background 200ms ease",
@@ -539,10 +542,7 @@ function TimelineRow({ stage, done, i, total, app }: {
     >
       <div style={{ display: "flex", flexDirection: "column", alignItems: "center", width: 20, flexShrink: 0, paddingTop: 2 }}>
         <div style={{
-          width: done ? 18 : 14,
-          height: done ? 18 : 14,
-          borderRadius: "50%",
-          flexShrink: 0,
+          width: done ? 18 : 14, height: done ? 18 : 14, borderRadius: "50%", flexShrink: 0,
           background: done ? "linear-gradient(135deg, #4f8ef7, #a78bfa)" : "rgba(45,51,82,0.6)",
           border: done ? "none" : "2px solid rgba(79,142,247,0.4)",
           boxShadow: done ? "0 0 16px rgba(79,142,247,0.7)" : "none",
@@ -550,12 +550,9 @@ function TimelineRow({ stage, done, i, total, app }: {
         }} />
         {i < total - 1 && (
           <div style={{
-            width: 2,
-            minHeight: 28,
+            width: 2, minHeight: 28,
             background: done ? "linear-gradient(to bottom, rgba(79,142,247,0.8), rgba(167,139,250,0.6))" : "rgba(35,40,64,0.4)",
-            marginTop: 4,
-            borderRadius: 2,
-            transition: "background 400ms ease",
+            marginTop: 4, borderRadius: 2, transition: "background 400ms ease",
           }} />
         )}
       </div>
@@ -569,12 +566,8 @@ function TimelineRow({ stage, done, i, total, app }: {
           </span>
           {done && (
             <span style={{
-              fontSize: 11,
-              background: "rgba(79,142,247,0.2)",
-              color: "#4f8ef7",
-              padding: "2px 10px",
-              borderRadius: 20,
-              fontWeight: 700,
+              fontSize: 11, background: "rgba(79,142,247,0.2)", color: "#4f8ef7",
+              padding: "2px 10px", borderRadius: 20, fontWeight: 700,
               animation: "scaleIn 280ms cubic-bezier(0.34,1.56,0.64,1) both",
             }}>✓ Done</span>
           )}
@@ -584,7 +577,7 @@ function TimelineRow({ stage, done, i, total, app }: {
   );
 }
 
-/* ─── Animated Section wrapper ─── */
+/* ─── Animated Section ─── */
 function AnimatedSection({ title, children, delay, contentReady }: {
   title: string; children: React.ReactNode; delay: number; contentReady: boolean;
 }) {
@@ -595,11 +588,9 @@ function AnimatedSection({ title, children, delay, contentReady }: {
       transition: `opacity 300ms ease ${delay}ms, transform 300ms ease ${delay}ms`,
     }}>
       <div style={{
-        display: "flex", alignItems: "center", gap: 10,
-        fontSize: 12, fontWeight: 700, letterSpacing: "0.1em",
-        textTransform: "uppercase", color: "#a1a8c6",
-        marginBottom: 16, paddingBottom: 12,
-        borderBottom: "1px solid rgba(35,40,64,0.4)",
+        display: "flex", alignItems: "center", gap: 10, fontSize: 12, fontWeight: 700,
+        letterSpacing: "0.1em", textTransform: "uppercase", color: "#a1a8c6",
+        marginBottom: 16, paddingBottom: 12, borderBottom: "1px solid rgba(35,40,64,0.4)",
       }}>
         <span style={{ fontSize: 18 }}>{title.split(" ")[0]}</span>
         <span>{title.slice(2)}</span>
@@ -634,10 +625,9 @@ function TasksTab({ tasks, onToggle, onDelete, onAddTask, showAddTask, newTaskTe
         ))}
         {showAddTask ? (
           <div style={{
-            padding: 16,
+            padding: 16, borderRadius: 16,
             background: "linear-gradient(135deg, rgba(79,142,247,0.08), rgba(167,139,250,0.08))",
             border: "2px dashed rgba(79,142,247,0.4)",
-            borderRadius: 16,
             animation: "scaleIn 220ms cubic-bezier(0.34,1.56,0.64,1) both",
           }}>
             <div style={{ display: "flex", gap: 10 }}>
@@ -648,44 +638,29 @@ function TasksTab({ tasks, onToggle, onDelete, onAddTask, showAddTask, newTaskTe
                 onKeyDown={e => e.key === "Enter" && onAddNewTask()}
                 placeholder="Add new task..."
                 style={{
-                  flex: 1,
-                  background: "rgba(24,28,38,0.7)",
-                  border: "1px solid rgba(45,51,82,0.5)",
-                  borderRadius: 12,
-                  padding: "10px 14px",
-                  fontSize: 14,
-                  color: "#e8eaf2",
-                  outline: "none",
+                  flex: 1, background: "rgba(24,28,38,0.7)", border: "1px solid rgba(45,51,82,0.5)",
+                  borderRadius: 12, padding: "10px 14px", fontSize: 14, color: "#e8eaf2", outline: "none",
                   transition: "border-color 200ms ease",
                 }}
                 onFocus={e => (e.currentTarget.style.borderColor = "rgba(79,142,247,0.5)")}
-                onBlur={e => (e.currentTarget.style.borderColor = "rgba(45,51,82,0.5)")}
+                onBlur={e  => (e.currentTarget.style.borderColor = "rgba(45,51,82,0.5)")}
               />
               <button
                 onClick={onAddNewTask}
                 disabled={!newTaskText.trim()}
                 style={{
-                  padding: "10px 16px",
-                  background: "linear-gradient(135deg, #4f8ef7, #3b7ef0)",
-                  color: "#fff",
-                  borderRadius: 12,
-                  fontSize: 13,
-                  fontWeight: 700,
-                  border: "none",
-                  cursor: "pointer",
-                  opacity: newTaskText.trim() ? 1 : 0.5,
-                  transition: "all 200ms ease",
+                  padding: "10px 16px", background: "linear-gradient(135deg, #4f8ef7, #3b7ef0)",
+                  color: "#fff", borderRadius: 12, fontSize: 13, fontWeight: 700,
+                  border: "none", cursor: "pointer",
+                  opacity: newTaskText.trim() ? 1 : 0.5, transition: "all 200ms ease",
                 }}
               >Add</button>
               <button
                 onClick={onCancelAddTask}
                 style={{
-                  width: 44, height: 44,
-                  background: "rgba(24,28,38,0.7)",
-                  border: "1px solid rgba(45,51,82,0.5)",
-                  borderRadius: 12,
-                  color: "#a1a8c6",
-                  cursor: "pointer",
+                  width: 44, height: 44, background: "rgba(24,28,38,0.7)",
+                  border: "1px solid rgba(45,51,82,0.5)", borderRadius: 12,
+                  color: "#a1a8c6", cursor: "pointer",
                   display: "flex", alignItems: "center", justifyContent: "center",
                   transition: "all 200ms ease",
                 }}
@@ -698,15 +673,10 @@ function TasksTab({ tasks, onToggle, onDelete, onAddTask, showAddTask, newTaskTe
           <button
             onClick={onAddTask}
             style={{
-              width: "100%",
-              padding: "16px 24px",
+              width: "100%", padding: "16px 24px",
               background: "linear-gradient(135deg, rgba(79,142,247,0.08), rgba(167,139,250,0.08))",
-              border: "2px dashed rgba(79,142,247,0.35)",
-              borderRadius: 16,
-              color: "#a1a8c6",
-              fontSize: 15,
-              fontWeight: 700,
-              cursor: "pointer",
+              border: "2px dashed rgba(79,142,247,0.35)", borderRadius: 16,
+              color: "#a1a8c6", fontSize: 15, fontWeight: 700, cursor: "pointer",
               display: "flex", alignItems: "center", justifyContent: "center", gap: 10,
               transition: "all 250ms ease",
             }}
@@ -733,15 +703,14 @@ function TasksTab({ tasks, onToggle, onDelete, onAddTask, showAddTask, newTaskTe
 
 function TaskItem({ task, onToggle, onDelete }: { task: Task; onToggle: () => void; onDelete: () => void }) {
   const [hovered, setHovered] = useState(false);
+  const dueDisplay = task.due_date || task.dueDate || null;
   return (
     <div
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
       style={{
-        display: "flex", alignItems: "center", gap: 14,
-        padding: "14px 16px",
-        borderRadius: 14,
-        cursor: "pointer",
+        display: "flex", alignItems: "center", gap: 14, padding: "14px 16px",
+        borderRadius: 14, cursor: "pointer",
         background: task.done
           ? "linear-gradient(135deg, rgba(16,185,129,0.18), rgba(5,150,105,0.12))"
           : hovered ? "rgba(79,142,247,0.08)" : "rgba(24,28,38,0.7)",
@@ -755,16 +724,13 @@ function TaskItem({ task, onToggle, onDelete }: { task: Task; onToggle: () => vo
       <div
         onClick={onToggle}
         style={{
-          width: 24, height: 24,
-          borderRadius: 8,
-          flexShrink: 0,
+          width: 24, height: 24, borderRadius: 8, flexShrink: 0,
           display: "flex", alignItems: "center", justifyContent: "center",
           background: task.done ? "linear-gradient(135deg, #10b981, #059669)" : "rgba(255,255,255,0.08)",
           border: task.done ? "none" : "2px solid rgba(79,142,247,0.35)",
           boxShadow: task.done ? "0 4px 12px rgba(16,185,129,0.5)" : "none",
-          transform: task.done ? "scale(1.12) rotate(0deg)" : "scale(1)",
-          transition: "all 260ms cubic-bezier(0.34,1.56,0.64,1)",
-          cursor: "pointer",
+          transform: task.done ? "scale(1.12)" : "scale(1)",
+          transition: "all 260ms cubic-bezier(0.34,1.56,0.64,1)", cursor: "pointer",
         }}
       >
         {task.done && <span style={{ color: "#fff", fontWeight: 900, fontSize: 14 }}>✓</span>}
@@ -772,60 +738,72 @@ function TaskItem({ task, onToggle, onDelete }: { task: Task; onToggle: () => vo
       <div style={{ flex: 1, minWidth: 0 }}>
         <p style={{
           fontSize: 14, fontWeight: 600,
-          color: task.done ? "#a1a8c6" : "#e8eaf2",
-          textDecoration: task.done ? "line-through" : "none",
-          transition: "all 200ms ease",
+          color: task.done ? "rgba(255,255,255,0.4)" : "#e8eaf2",
           margin: 0,
+          textDecoration: task.done ? "line-through" : "none",
+          whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
+          transition: "all 250ms ease",
         }}>{task.text}</p>
-        {task.dueDate && (
-          <span style={{ fontSize: 12, color: "#a1a8c6", marginTop: 2, display: "block" }}>📅 {task.dueDate}</span>
+        {dueDisplay && (
+          <span style={{ fontSize: 12, color: "#a1a8c6", marginTop: 2, display: "block" }}>
+            Due: {dueDisplay}
+          </span>
         )}
       </div>
       <button
         onClick={onDelete}
         style={{
-          width: 32, height: 32,
-          borderRadius: 10,
-          border: "none",
-          background: "transparent",
-          cursor: "pointer",
+          width: 30, height: 30, borderRadius: 8, flexShrink: 0,
+          background: "transparent", border: "none", cursor: "pointer",
+          color: "rgba(255,255,255,0.25)", fontSize: 14,
           display: "flex", alignItems: "center", justifyContent: "center",
-          opacity: hovered ? 1 : 0,
-          transition: "all 180ms ease",
-          color: "#a1a8c6",
+          opacity: hovered ? 1 : 0, transition: "opacity 180ms ease, color 180ms ease",
         }}
-        onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.background = "rgba(248,113,113,0.2)"; (e.currentTarget as HTMLButtonElement).style.color = "#f87171"; }}
-        onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.background = "transparent"; (e.currentTarget as HTMLButtonElement).style.color = "#a1a8c6"; }}
+        onMouseEnter={e => (e.currentTarget as HTMLButtonElement).style.color = "#f87171"}
+        onMouseLeave={e => (e.currentTarget as HTMLButtonElement).style.color = "rgba(255,255,255,0.25)"}
       >🗑️</button>
     </div>
   );
 }
 
 /* ─── Files Tab ─── */
-function FilesTab({ files, onDelete, contentReady }: { files: AppFile[]; onDelete: (id: number) => void; contentReady: boolean }) {
+function FilesTab({ files, onDelete, onView, onUpload, contentReady }: {
+  files: AppFile[];
+  onDelete: (id: number) => void;
+  onView: (id: number) => void;
+  onUpload: (file: File) => void;
+  contentReady: boolean;
+}) {
   return (
     <AnimatedSection title="📁 Files & Documents" delay={80} contentReady={contentReady}>
       <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
         {files.map((file, i) => (
           <div key={file.id} style={{ animation: `fadeSlideUp 280ms cubic-bezier(0.34,1.2,0.64,1) ${i * 50}ms both` }}>
-            <FileItem file={file} onDelete={() => onDelete(file.id)} />
+            <FileItem file={file} onDelete={() => onDelete(file.id)} onView={() => onView(file.id)} />
           </div>
         ))}
-        <UploadDropZone />
+        <UploadDropZone onUpload={onUpload} />
       </div>
     </AnimatedSection>
   );
 }
 
-function FileItem({ file, onDelete }: { file: AppFile; onDelete: () => void }) {
+function FileItem({ file, onDelete, onView }: { file: AppFile; onDelete: () => void; onView: () => void }) {
   const [hovered, setHovered] = useState(false);
+  // Support both DB shape and legacy mock shape
+  const displayType  = file.file_type || file.type || "doc";
+  const displaySize  = file.size_bytes ? formatBytes(file.size_bytes) : (file.size || "");
+  const displayDate  = file.uploaded_at
+    ? new Date(file.uploaded_at).toLocaleDateString("en-GB", { day: "2-digit", month: "short" })
+    : (file.uploadedAt || "");
+  const icon = file.icon || fileIcon(displayType);
+
   return (
     <div
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
       style={{
-        display: "flex", alignItems: "center", gap: 14,
-        padding: "14px 16px",
+        display: "flex", alignItems: "center", gap: 14, padding: "14px 16px",
         borderRadius: 14,
         background: hovered ? "rgba(79,142,247,0.08)" : "rgba(24,28,38,0.7)",
         border: `1px solid ${hovered ? "rgba(79,142,247,0.45)" : "rgba(45,51,82,0.5)"}`,
@@ -833,23 +811,116 @@ function FileItem({ file, onDelete }: { file: AppFile; onDelete: () => void }) {
         transition: "all 220ms ease",
       }}
     >
-      <span style={{ fontSize: 24, flexShrink: 0 }}>{file.icon}</span>
+      <span style={{ fontSize: 24, flexShrink: 0 }}>{icon}</span>
       <div style={{ flex: 1, minWidth: 0 }}>
-        <p style={{ fontSize: 14, fontWeight: 600, color: "#e8eaf2", margin: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{file.name}</p>
+        <p style={{ fontSize: 14, fontWeight: 600, color: "#e8eaf2", margin: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+          {file.name}
+        </p>
         <div style={{ display: "flex", gap: 8, fontSize: 12, color: "#a1a8c6", marginTop: 2 }}>
-          <span>{file.size}</span><span>•</span><span>{file.type.toUpperCase()}</span><span>•</span><span>{file.uploadedAt}</span>
+          {displaySize && <span>{displaySize}</span>}
+          {displaySize && <span>•</span>}
+          <span>{displayType.toUpperCase()}</span>
+          {displayDate && <><span>•</span><span>{displayDate}</span></>}
         </div>
       </div>
       <div style={{ display: "flex", gap: 8, opacity: hovered ? 1 : 0, transition: "opacity 180ms ease" }}>
-        <button style={{ padding: "6px 12px", background: "rgba(79,142,247,0.2)", border: "1px solid rgba(79,142,247,0.4)", color: "#4f8ef7", borderRadius: 10, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>View</button>
-        <button onClick={onDelete} style={{ width: 34, height: 34, background: "rgba(248,113,113,0.2)", border: "1px solid rgba(248,113,113,0.4)", color: "#f87171", borderRadius: 10, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>🗑️</button>
+        <button
+          onClick={onView}
+          style={{ padding: "6px 12px", background: "rgba(79,142,247,0.2)", border: "1px solid rgba(79,142,247,0.4)", color: "#4f8ef7", borderRadius: 10, fontSize: 12, fontWeight: 700, cursor: "pointer" }}
+        >View</button>
+        <button
+          onClick={onDelete}
+          style={{ width: 34, height: 34, background: "rgba(248,113,113,0.2)", border: "1px solid rgba(248,113,113,0.4)", color: "#f87171", borderRadius: 10, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}
+        >🗑️</button>
       </div>
     </div>
   );
 }
 
-/* ─── Notes Tab ─── */
-function NotesTab({ notes, onChange, contentReady }: { notes: string; onChange: (n: string) => void; contentReady: boolean }) {
+/* ─── Upload Drop Zone — fully wired ─── */
+function UploadDropZone({ onUpload }: { onUpload: (file: File) => void }) {
+  const [dragOver,   setDragOver]   = useState(false);
+  const [uploading,  setUploading]  = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  const handleFiles = async (fileList: FileList | null) => {
+    if (!fileList || fileList.length === 0) return;
+    setUploading(true);
+    for (const file of Array.from(fileList)) {
+      await onUpload(file);
+    }
+    setUploading(false);
+  };
+
+  return (
+    <div
+      onDragOver={e => { e.preventDefault(); setDragOver(true); }}
+      onDragLeave={() => setDragOver(false)}
+      onDrop={e => {
+        e.preventDefault();
+        setDragOver(false);
+        handleFiles(e.dataTransfer.files);
+      }}
+      onClick={() => !uploading && inputRef.current?.click()}
+      style={{
+        border: `2px dashed ${dragOver ? "rgba(79,142,247,0.8)" : "rgba(79,142,247,0.35)"}`,
+        borderRadius: 16, padding: "28px 20px",
+        background: dragOver
+          ? "rgba(79,142,247,0.12)"
+          : "linear-gradient(135deg, rgba(79,142,247,0.05), rgba(167,139,250,0.05))",
+        textAlign: "center", cursor: uploading ? "wait" : "pointer",
+        transition: "all 220ms ease",
+        transform: dragOver ? "scale(1.02)" : "scale(1)",
+      }}
+    >
+      <input
+        ref={inputRef}
+        type="file"
+        multiple
+        accept=".pdf,.doc,.docx,.png,.jpg,.jpeg,.gif,.webp"
+        style={{ display: "none" }}
+        onChange={e => handleFiles(e.target.files)}
+      />
+      <div style={{
+        width: 56, height: 56,
+        background: "rgba(79,142,247,0.15)", border: "2px solid rgba(79,142,247,0.35)",
+        borderRadius: 16, display: "flex", alignItems: "center", justifyContent: "center",
+        margin: "0 auto 12px", fontSize: 22,
+        transform: dragOver ? "scale(1.2) translateY(-4px)" : "scale(1)",
+        transition: "transform 300ms cubic-bezier(0.34,1.56,0.64,1)",
+      }}>
+        {uploading ? "⏳" : "⬆"}
+      </div>
+      <h4 style={{ fontSize: 15, fontWeight: 700, color: "#e8eaf2", margin: "0 0 4px" }}>
+        {uploading ? "Uploading…" : "Drop files here"}
+      </h4>
+      <p style={{ fontSize: 13, color: "#a1a8c6", margin: "0 0 16px" }}>PDF, DOC, Images (Max 10MB)</p>
+      {!uploading && (
+        <button
+          onClick={e => { e.stopPropagation(); inputRef.current?.click(); }}
+          style={{
+            padding: "8px 20px", background: "linear-gradient(135deg, #4f8ef7, #3b7ef0)",
+            color: "#fff", borderRadius: 10, fontWeight: 700, fontSize: 13,
+            border: "none", cursor: "pointer", boxShadow: "0 4px 12px rgba(79,142,247,0.3)",
+            transition: "all 200ms ease",
+          }}
+        >
+          Select Files
+        </button>
+      )}
+    </div>
+  );
+}
+
+/* ─── Notes Tab — with working Save ─── */
+function NotesTab({ notes, onChange, onSave, saving, saved, contentReady }: {
+  notes: string;
+  onChange: (n: string) => void;
+  onSave: () => void;
+  saving: boolean;
+  saved: boolean;
+  contentReady: boolean;
+}) {
   return (
     <AnimatedSection title="📝 Interview Notes" delay={80} contentReady={contentReady}>
       <textarea
@@ -858,17 +929,10 @@ function NotesTab({ notes, onChange, contentReady }: { notes: string; onChange: 
         placeholder="Write detailed notes about your interview experience..."
         rows={8}
         style={{
-          width: "100%",
-          boxSizing: "border-box",
-          background: "rgba(24,28,38,0.7)",
-          border: "2px solid rgba(45,51,82,0.5)",
-          borderRadius: 16,
-          padding: "16px 18px",
-          fontSize: 15,
-          color: "#e8eaf2",
-          resize: "none",
-          outline: "none",
-          fontFamily: "inherit",
+          width: "100%", boxSizing: "border-box",
+          background: "rgba(24,28,38,0.7)", border: "2px solid rgba(45,51,82,0.5)",
+          borderRadius: 16, padding: "16px 18px", fontSize: 15, color: "#e8eaf2",
+          resize: "none", outline: "none", fontFamily: "inherit",
           transition: "border-color 250ms ease, box-shadow 250ms ease",
         }}
         onFocus={e => {
@@ -881,27 +945,37 @@ function NotesTab({ notes, onChange, contentReady }: { notes: string; onChange: 
         }}
       />
       <div style={{ display: "flex", gap: 12, marginTop: 16, paddingTop: 16, borderTop: "1px solid rgba(35,40,64,0.5)" }}>
-        <button style={{
-          flex: 1, padding: "12px 24px",
-          background: "linear-gradient(135deg, #10b981, #059669)",
-          color: "#fff", borderRadius: 12, fontWeight: 700, fontSize: 14, border: "none", cursor: "pointer",
-          boxShadow: "0 4px 16px rgba(16,185,129,0.3)",
-          transition: "all 200ms ease",
-        }}
-        onMouseEnter={e => (e.currentTarget as HTMLButtonElement).style.transform = "translateY(-1px)"}
-        onMouseLeave={e => (e.currentTarget as HTMLButtonElement).style.transform = "translateY(0)"}
-        >💾 Save Notes</button>
-        <button style={{
-          padding: "12px 20px",
-          background: "rgba(79,142,247,0.2)",
-          border: "1px solid rgba(79,142,247,0.4)",
-          color: "#4f8ef7", borderRadius: 12, fontWeight: 700, fontSize: 14, cursor: "pointer",
-          transition: "all 200ms ease",
-        }}
-        onMouseEnter={e => (e.currentTarget as HTMLButtonElement).style.background = "rgba(79,142,247,0.35)"}
-        onMouseLeave={e => (e.currentTarget as HTMLButtonElement).style.background = "rgba(79,142,247,0.2)"}
-        >🎙️ AI Summary</button>
+        <button
+          onClick={onSave}
+          disabled={saving}
+          style={{
+            flex: 1, padding: "12px 24px",
+            background: saved
+              ? "linear-gradient(135deg, #10b981, #059669)"
+              : "linear-gradient(135deg, #10b981, #059669)",
+            color: "#fff", borderRadius: 12, fontWeight: 700, fontSize: 14,
+            border: "none", cursor: saving ? "not-allowed" : "pointer",
+            boxShadow: "0 4px 16px rgba(16,185,129,0.3)",
+            transition: "all 200ms ease",
+            display: "flex", alignItems: "center", justifyContent: "center", gap: 8,
+            opacity: saving ? 0.7 : 1,
+          }}
+          onMouseEnter={e => { if (!saving) (e.currentTarget as HTMLButtonElement).style.transform = "translateY(-1px)"; }}
+          onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.transform = "translateY(0)"; }}
+        >
+          {saving ? (
+            <>
+              <span style={{
+                width: 14, height: 14, borderRadius: "50%",
+                border: "2px solid rgba(255,255,255,0.3)", borderTopColor: "#fff",
+                animation: "spin 0.7s linear infinite", display: "inline-block",
+              }} />
+              Saving…
+            </>
+          ) : saved ? "✓ Saved!" : "💾 Save Notes"}
+        </button>
       </div>
+      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
     </AnimatedSection>
   );
 }
@@ -915,15 +989,29 @@ function RemindersTab({ reminders, onDelete, onAdd, contentReady }: {
 }) {
   const [showForm, setShowForm] = useState(false);
   const [title,    setTitle]    = useState("");
-  const [date,     setDate]     = useState("");
-  const [time,     setTime]     = useState("");
+  // Store raw input values (for the <input type="date/time"> controls)
+  const [rawDate,  setRawDate]  = useState("");   // "yyyy-mm-dd"
+  const [rawTime,  setRawTime]  = useState("");   // "HH:MM"
   const [type,     setType]     = useState<Reminder["type"]>("followup");
 
+  // Derived display strings sent to API
+  const displayDate = rawDate
+    ? new Date(rawDate + "T00:00:00").toLocaleDateString("en-GB", { day: "2-digit", month: "short" })
+    : "";
+  const displayTime = rawTime
+    ? (() => {
+        const [h, m] = rawTime.split(":").map(Number);
+        const ampm = h >= 12 ? "PM" : "AM";
+        return `${h % 12 || 12}:${String(m).padStart(2, "0")} ${ampm}`;
+      })()
+    : "";
+
+  const canSubmit = title.trim() && rawDate && rawTime;
+
   const handleAdd = () => {
-    if (!title.trim() || !date.trim() || !time.trim()) return;
-    // POST /api/applications/:id/reminders  (called via onAdd passed from Drawer)
-    onAdd({ title: title.trim(), date: date.trim(), time: time.trim(), type });
-    setTitle(""); setDate(""); setTime(""); setType("followup");
+    if (!canSubmit) return;
+    onAdd({ title: title.trim(), date: displayDate, time: displayTime, type });
+    setTitle(""); setRawDate(""); setRawTime(""); setType("followup");
     setShowForm(false);
   };
 
@@ -941,7 +1029,6 @@ function RemindersTab({ reminders, onDelete, onAdd, contentReady }: {
           </div>
         ))}
 
-        {/* ── Add reminder inline form ── */}
         {showForm ? (
           <div style={{
             padding: 16, borderRadius: 16,
@@ -965,17 +1052,12 @@ function RemindersTab({ reminders, onDelete, onAdd, contentReady }: {
               onBlur={e  => (e.currentTarget.style.borderColor = "rgba(45,51,82,0.5)")}
             />
 
-            {/* Date + Time row */}
+            {/* Date + Time row — keep raw HTML values, derive display on submit */}
             <div style={{ display: "flex", gap: 8 }}>
               <input
                 type="date"
-                value={date}
-                onChange={e => {
-                  // Convert yyyy-mm-dd → "20 Mar" display format
-                  const d = new Date(e.target.value + "T00:00:00");
-                  const formatted = d.toLocaleDateString("en-GB", { day: "2-digit", month: "short" });
-                  setDate(formatted);
-                }}
+                value={rawDate}
+                onChange={e => setRawDate(e.target.value)}
                 style={{
                   flex: 1, background: "rgba(24,28,38,0.7)", border: "1px solid rgba(45,51,82,0.5)",
                   borderRadius: 10, padding: "9px 13px", fontSize: 13, color: "#e8eaf2",
@@ -984,15 +1066,8 @@ function RemindersTab({ reminders, onDelete, onAdd, contentReady }: {
               />
               <input
                 type="time"
-                value={time}
-                onChange={e => {
-                  // Convert 24h → "11:00 AM" display format
-                  const [h, m] = e.target.value.split(":");
-                  const hour = parseInt(h);
-                  const ampm = hour >= 12 ? "PM" : "AM";
-                  const display = `${hour % 12 || 12}:${m} ${ampm}`;
-                  setTime(display);
-                }}
+                value={rawTime}
+                onChange={e => setRawTime(e.target.value)}
                 style={{
                   flex: 1, background: "rgba(24,28,38,0.7)", border: "1px solid rgba(45,51,82,0.5)",
                   borderRadius: 10, padding: "9px 13px", fontSize: 13, color: "#e8eaf2",
@@ -1000,6 +1075,13 @@ function RemindersTab({ reminders, onDelete, onAdd, contentReady }: {
                 }}
               />
             </div>
+
+            {/* Preview row */}
+            {(displayDate || displayTime) && (
+              <div style={{ fontSize: 12, color: "rgba(167,139,250,0.7)", padding: "4px 2px" }}>
+                📅 {displayDate || "—"} &nbsp;·&nbsp; 🕐 {displayTime || "—"}
+              </div>
+            )}
 
             {/* Type selector */}
             <div style={{ display: "flex", gap: 6 }}>
@@ -1025,19 +1107,16 @@ function RemindersTab({ reminders, onDelete, onAdd, contentReady }: {
             <div style={{ display: "flex", gap: 8 }}>
               <button
                 onClick={handleAdd}
-                disabled={!title.trim() || !date.trim() || !time.trim()}
+                disabled={!canSubmit}
                 style={{
                   flex: 1, padding: "10px 0", borderRadius: 10, fontSize: 13, fontWeight: 700,
                   background: "linear-gradient(135deg, #a78bfa, #8b5cf6)",
                   border: "none", color: "#fff", cursor: "pointer",
-                  opacity: (!title.trim() || !date.trim() || !time.trim()) ? 0.5 : 1,
-                  transition: "opacity 160ms ease",
+                  opacity: canSubmit ? 1 : 0.5, transition: "opacity 160ms ease",
                 }}
-              >
-                Save Reminder
-              </button>
+              >Save Reminder</button>
               <button
-                onClick={() => { setShowForm(false); setTitle(""); setDate(""); setTime(""); }}
+                onClick={() => { setShowForm(false); setTitle(""); setRawDate(""); setRawTime(""); }}
                 style={{
                   width: 42, borderRadius: 10, fontSize: 16,
                   background: "rgba(24,28,38,0.7)", border: "1px solid rgba(45,51,82,0.5)",
@@ -1072,15 +1151,12 @@ function ReminderItem({ reminder, onDelete }: { reminder: Reminder; onDelete: ()
   const [hovered, setHovered] = useState(false);
   const getIcon = (type: Reminder["type"]) =>
     type === "interview" ? "🎙️" : type === "deadline" ? "⏰" : "📧";
-
   return (
     <div
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
       style={{
-        display: "flex", alignItems: "center", gap: 14,
-        padding: "14px 16px",
-        borderRadius: 14,
+        display: "flex", alignItems: "center", gap: 14, padding: "14px 16px", borderRadius: 14,
         background: hovered
           ? "linear-gradient(135deg, rgba(24,28,38,0.9), rgba(19,22,30,0.9))"
           : "linear-gradient(135deg, rgba(24,28,38,0.8), rgba(19,22,30,0.8))",
@@ -1090,70 +1166,28 @@ function ReminderItem({ reminder, onDelete }: { reminder: Reminder; onDelete: ()
       }}
     >
       <div style={{
-        width: 52, height: 52,
-        borderRadius: 14,
+        width: 52, height: 52, borderRadius: 14,
         background: "linear-gradient(135deg, rgba(167,139,250,0.25), rgba(139,92,246,0.25))",
-        display: "flex", alignItems: "center", justifyContent: "center",
-        flexShrink: 0,
+        display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
         transform: hovered ? "scale(1.08) rotate(-4deg)" : "scale(1) rotate(0deg)",
         transition: "transform 260ms cubic-bezier(0.34,1.56,0.64,1)",
       }}>
         <span style={{ fontSize: 22 }}>{getIcon(reminder.type)}</span>
       </div>
       <div style={{ flex: 1, minWidth: 0 }}>
-        <h4 style={{ fontSize: 15, fontWeight: 700, color: "#e8eaf2", margin: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{reminder.title}</h4>
-        <p style={{ fontSize: 13, color: "#fb923c", fontWeight: 600, margin: "2px 0 0" }}>{reminder.date} • {reminder.time}</p>
+        <h4 style={{ fontSize: 15, fontWeight: 700, color: "#e8eaf2", margin: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+          {reminder.title}
+        </h4>
+        <p style={{ fontSize: 13, color: "#fb923c", fontWeight: 600, margin: "2px 0 0" }}>
+          {reminder.date} · {reminder.time}
+        </p>
       </div>
       <div style={{ display: "flex", gap: 8, opacity: hovered ? 1 : 0, transition: "opacity 180ms ease" }}>
-        <button style={{ padding: "6px 12px", background: "rgba(167,139,250,0.25)", border: "1px solid rgba(167,139,250,0.45)", color: "#a78bfa", borderRadius: 10, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>Complete</button>
-        <button onClick={onDelete} style={{ width: 38, height: 38, background: "rgba(248,113,113,0.25)", border: "1px solid rgba(248,113,113,0.45)", color: "#f87171", borderRadius: 10, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>🗑️</button>
+        <button
+          onClick={onDelete}
+          style={{ width: 38, height: 38, background: "rgba(248,113,113,0.25)", border: "1px solid rgba(248,113,113,0.45)", color: "#f87171", borderRadius: 10, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}
+        >🗑️</button>
       </div>
-    </div>
-  );
-}
-
-/* ─── Upload Drop Zone ─── */
-function UploadDropZone() {
-  const [dragOver, setDragOver] = useState(false);
-  return (
-    <div
-      onDragOver={e => { e.preventDefault(); setDragOver(true); }}
-      onDragLeave={() => setDragOver(false)}
-      onDrop={() => setDragOver(false)}
-      style={{
-        border: `2px dashed ${dragOver ? "rgba(79,142,247,0.8)" : "rgba(79,142,247,0.35)"}`,
-        borderRadius: 16,
-        padding: "28px 20px",
-        background: dragOver
-          ? "rgba(79,142,247,0.12)"
-          : "linear-gradient(135deg, rgba(79,142,247,0.05), rgba(167,139,250,0.05))",
-        textAlign: "center",
-        cursor: "pointer",
-        transition: "all 220ms ease",
-        transform: dragOver ? "scale(1.02)" : "scale(1)",
-      }}
-    >
-      <div style={{
-        width: 56, height: 56,
-        background: "rgba(79,142,247,0.15)",
-        border: "2px solid rgba(79,142,247,0.35)",
-        borderRadius: 16,
-        display: "flex", alignItems: "center", justifyContent: "center",
-        margin: "0 auto 12px",
-        fontSize: 22,
-        transition: "transform 300ms cubic-bezier(0.34,1.56,0.64,1)",
-        transform: dragOver ? "scale(1.2) translateY(-4px)" : "scale(1)",
-      }}>⬆</div>
-      <h4 style={{ fontSize: 15, fontWeight: 700, color: "#e8eaf2", margin: "0 0 4px" }}>Drop files here</h4>
-      <p style={{ fontSize: 13, color: "#a1a8c6", margin: "0 0 16px" }}>PDF, DOC, Images (Max 10MB)</p>
-      <button style={{
-        padding: "8px 20px",
-        background: "linear-gradient(135deg, #4f8ef7, #3b7ef0)",
-        color: "#fff", borderRadius: 10, fontWeight: 700, fontSize: 13,
-        border: "none", cursor: "pointer",
-        boxShadow: "0 4px 12px rgba(79,142,247,0.3)",
-        transition: "all 200ms ease",
-      }}>Select Files</button>
     </div>
   );
 }

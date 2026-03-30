@@ -5,20 +5,14 @@
 // ============================================================
 
 import { NextResponse } from "next/server";
-import { supabase } from "@/lib/supabase";
+import { createClient } from "@/lib/supabase/server";
 import { rowToApplication } from "@/types";
 import type { ApplicationRow } from "@/types";
 
-// ── GET — fetch all applications for the current user ─────────
 export async function GET() {
-  const {
-    data: { user },
-    error: authErr,
-  } = await supabase.auth.getUser();
-
-  if (authErr || !user) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
+  const supabase = await createClient();
+  const { data: { user }, error: authErr } = await supabase.auth.getUser();
+  if (authErr || !user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const { data, error } = await supabase
     .from("applications")
@@ -27,31 +21,19 @@ export async function GET() {
     .order("created_at", { ascending: false });
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-
-  // Convert DB rows → Application shape that your components expect
-  const apps = (data as ApplicationRow[]).map(rowToApplication);
-  return NextResponse.json(apps);
+  return NextResponse.json((data as ApplicationRow[]).map(rowToApplication));
 }
 
-// ── POST — create a new application ──────────────────────────
 export async function POST(req: Request) {
-  const {
-    data: { user },
-    error: authErr,
-  } = await supabase.auth.getUser();
-
-  if (authErr || !user) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
+  const supabase = await createClient();
+  const { data: { user }, error: authErr } = await supabase.auth.getUser();
+  if (authErr || !user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const body = await req.json();
   const { company, role, status, date, notes } = body;
 
   if (!company || !role) {
-    return NextResponse.json(
-      { error: "company and role are required" },
-      { status: 400 }
-    );
+    return NextResponse.json({ error: "company and role are required" }, { status: 400 });
   }
 
   const { data, error } = await supabase
@@ -68,6 +50,5 @@ export async function POST(req: Request) {
     .single();
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-
   return NextResponse.json(rowToApplication(data as ApplicationRow), { status: 201 });
 }
