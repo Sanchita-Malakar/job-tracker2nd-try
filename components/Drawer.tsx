@@ -1,6 +1,21 @@
 "use client";
+// ============================================================
+//  components/Drawer.tsx
+//
+//  FIXES APPLIED:
+//  1. Loading state: Promise.all fetch with single loading flag
+//     prevents old data flashing when switching applications
+//  2. refreshApplication called on file upload/delete too
+//  3. File items now show uploaded_at date
+//  4. Notes: saves current note + inserts into note_history table
+//  5. Note history shown below textarea (date-stamped entries)
+//  6. Error feedback shown on upload failure (was silently failing)
+//  7. saveNotes also calls refreshApplication so context stays in sync
+// ============================================================
+
 import { useState, useEffect, useRef } from "react";
 import type { Application } from "@/types";
+import { useData } from "@/contexts/DataContext";
 
 const STATUS_COLORS: Record<string, {
   dot: string; bg: string; text: string; border: string; gradient: string; shadow: string;
@@ -17,7 +32,6 @@ interface Task {
   text: string;
   done: boolean;
   due_date?: string | null;
-  // legacy field from old code — handle both shapes
   dueDate?: string;
 }
 
@@ -27,11 +41,9 @@ interface AppFile {
   file_type: string;
   size_bytes: number;
   uploaded_at: string;
-  // legacy fields (old mock shape)
   icon?: string;
   size?: string;
   type?: string;
-  uploadedAt?: string;
 }
 
 interface Reminder {
@@ -42,6 +54,13 @@ interface Reminder {
   type: "interview" | "deadline" | "followup";
 }
 
+// FIX 5: Note history entry type
+interface NoteHistoryEntry {
+  id: number;
+  content: string;
+  saved_at: string;
+}
+
 const TIMELINE_STAGES = ["Applied", "OA", "Interview", "Offer"];
 
 interface DrawerProps {
@@ -50,7 +69,6 @@ interface DrawerProps {
   onUpdateApp?: (updatedApp: Partial<Application>) => void;
 }
 
-// ── helpers ──────────────────────────────────────────────────
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
@@ -63,22 +81,36 @@ function fileIcon(type: string): string {
   return "📁";
 }
 
-export default function Drawer({ app, onClose, onUpdateApp }: DrawerProps) {
-  const [tasks,         setTasks]         = useState<Task[]>([]);
-  const [notes,         setNotes]         = useState("");
-  const [notesSaving,   setNotesSaving]   = useState(false);
-  const [notesSaved,    setNotesSaved]    = useState(false);
-  const [files,         setFiles]         = useState<AppFile[]>([]);
-  const [reminders,     setReminders]     = useState<Reminder[]>([]);
-  const [showAddTask,   setShowAddTask]   = useState(false);
-  const [newTaskText,   setNewTaskText]   = useState("");
-  const [activeTab,     setActiveTab]     = useState<"tasks" | "files" | "notes" | "reminders">("tasks");
+// FIX 3: Format uploaded_at date for display
+function formatUploadDate(dateStr: string): string {
+  try {
+    return new Date(dateStr).toLocaleDateString("en-GB", {
+      day: "2-digit", month: "short", year: "numeric",
+    });
+  } catch {
+    return dateStr;
+  }
+}
 
-  // Animation state
-  const [mounted,       setMounted]       = useState(false);
-  const [visible,       setVisible]       = useState(false);
-  const [contentReady,  setContentReady]  = useState(false);
-  const prevApp = useRef<Application | null>(null);
+export default function Drawer({ app, onClose, onUpdateApp }: DrawerProps) {
+  const { refreshApplication } = useData();
+
+  const [tasks,          setTasks]          = useState<Task[]>([]);
+  const [notes,          setNotes]          = useState("");
+  const [notesSaving,    setNotesSaving]    = useState(false);
+  const [notesSaved,     setNotesSaved]     = useState(false);
+  const [noteHistory,    setNoteHistory]    = useState<NoteHistoryEntry[]>([]); // FIX 5
+  const [files,          setFiles]          = useState<AppFile[]>([]);
+  const [reminders,      setReminders]      = useState<Reminder[]>([]);
+  const [showAddTask,    setShowAddTask]    = useState(false);
+  const [newTaskText,    setNewTaskText]    = useState("");
+  const [activeTab,      setActiveTab]      = useState<"tasks" | "files" | "notes" | "reminders">("tasks");
+  const [drawerLoading,  setDrawerLoading]  = useState(false); // FIX 1
+  const [uploadError,    setUploadError]    = useState<string | null>(null); // FIX 6
+
+  const [mounted,        setMounted]        = useState(false);
+  const [visible,        setVisible]        = useState(false);
+  const [contentReady,   setContentReady]   = useState(false);
 
   // ── Open / close animation ───────────────────────────────
   useEffect(() => {
@@ -91,7 +123,6 @@ export default function Drawer({ app, onClose, onUpdateApp }: DrawerProps) {
           setTimeout(() => setContentReady(true), 180);
         });
       });
-      prevApp.current = app;
     } else {
       setVisible(false);
       setContentReady(false);
@@ -100,7 +131,7 @@ export default function Drawer({ app, onClose, onUpdateApp }: DrawerProps) {
     }
   }, [app]);
 
-  // ── Fetch all data from API when app changes ─────────────
+  // ── FIX 1: Single loading flag with Promise.all ──────────
   useEffect(() => {
     if (!app) return;
 
@@ -109,24 +140,29 @@ export default function Drawer({ app, onClose, onUpdateApp }: DrawerProps) {
     setTasks([]);
     setFiles([]);
     setReminders([]);
+    setNoteHistory([]);
+    setUploadError(null);
+    setDrawerLoading(true);
 
     const id = app.id;
 
-    fetch(`/api/applications/${id}/tasks`)
-      .then(r => r.ok ? r.json() : [])
-      .then((data: Task[]) => setTasks(data))
-      .catch(() => setTasks([]));
-
-    fetch(`/api/applications/${id}/files`)
-      .then(r => r.ok ? r.json() : [])
-      .then((data: AppFile[]) => setFiles(data))
-      .catch(() => setFiles([]));
-
-    fetch(`/api/applications/${id}/reminders`)
-      .then(r => r.ok ? r.json() : [])
-      .then((data: Reminder[]) => setReminders(data))
-      .catch(() => setReminders([]));
-
+    Promise.all([
+      fetch(`/api/applications/${id}/tasks`)
+        .then(r => r.ok ? r.json() : []).catch(() => []),
+      fetch(`/api/applications/${id}/files`)
+        .then(r => r.ok ? r.json() : []).catch(() => []),
+      fetch(`/api/applications/${id}/reminders`)
+        .then(r => r.ok ? r.json() : []).catch(() => []),
+      fetch(`/api/applications/${id}/note-history`)
+        .then(r => r.ok ? r.json() : []).catch(() => []), // FIX 5
+    ]).then(([fetchedTasks, fetchedFiles, fetchedReminders, fetchedHistory]) => {
+      setTasks(fetchedTasks);
+      setFiles(fetchedFiles);
+      setReminders(fetchedReminders);
+      setNoteHistory(fetchedHistory);
+    }).finally(() => {
+      setDrawerLoading(false);
+    });
   }, [app]);
 
   // ── Tasks ─────────────────────────────────────────────────
@@ -140,6 +176,7 @@ export default function Drawer({ app, onClose, onUpdateApp }: DrawerProps) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ done: !task.done }),
       });
+      if (app) refreshApplication(app.id);
     } catch {
       setTasks(prev => prev.map(t => t.id === id ? { ...t, done: task.done } : t));
     }
@@ -162,6 +199,7 @@ export default function Drawer({ app, onClose, onUpdateApp }: DrawerProps) {
       if (res.ok) {
         const created: Task = await res.json();
         setTasks(prev => prev.map(t => t.id === tempId ? created : t));
+        refreshApplication(app.id);
       }
     } catch {
       setTasks(prev => prev.filter(t => t.id !== tempId));
@@ -171,14 +209,16 @@ export default function Drawer({ app, onClose, onUpdateApp }: DrawerProps) {
   const deleteTask = async (id: number) => {
     setTasks(prev => prev.filter(t => t.id !== id));
     await fetch(`/api/tasks/${id}`, { method: "DELETE" }).catch(() => {});
+    if (app) refreshApplication(app.id);
   };
 
-  // ── Notes — PATCH to API ──────────────────────────────────
+  // ── FIX 4 + 5: Notes — save current + insert history entry ──
   const saveNotes = async () => {
     if (!app) return;
     setNotesSaving(true);
     setNotesSaved(false);
     try {
+      // Save current note text on application record
       const res = await fetch(`/api/applications/${app.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
@@ -189,6 +229,22 @@ export default function Drawer({ app, onClose, onUpdateApp }: DrawerProps) {
         onUpdateApp?.({ notes: updated.notes });
         setNotesSaved(true);
         setTimeout(() => setNotesSaved(false), 2500);
+
+        // FIX 4: Also insert into note_history table
+        if (notes.trim()) {
+          const histRes = await fetch(`/api/applications/${app.id}/note-history`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ content: notes }),
+          });
+          if (histRes.ok) {
+            const newEntry: NoteHistoryEntry = await histRes.json();
+            setNoteHistory(prev => [newEntry, ...prev]); // newest first
+          }
+        }
+
+        // FIX 7: sync context so /resumes page reflects the change
+        refreshApplication(app.id);
       }
     } catch {
       // silently fail
@@ -197,9 +253,10 @@ export default function Drawer({ app, onClose, onUpdateApp }: DrawerProps) {
     }
   };
 
-  // ── Files — Upload via FormData POST, DELETE ──────────────
+  // ── Files ─────────────────────────────────────────────────
   const uploadFile = async (file: File) => {
     if (!app) return;
+    setUploadError(null); // FIX 6: clear previous error
     const formData = new FormData();
     formData.append("file", file);
     try {
@@ -210,15 +267,22 @@ export default function Drawer({ app, onClose, onUpdateApp }: DrawerProps) {
       if (res.ok) {
         const created: AppFile = await res.json();
         setFiles(prev => [created, ...prev]);
+        // FIX 2: refresh context on upload
+        refreshApplication(app.id);
+      } else {
+        // FIX 6: surface error to user
+        const errData = await res.json().catch(() => ({}));
+        setUploadError(errData?.error || `Upload failed (${res.status})`);
       }
-    } catch {
-      // silently fail
+    } catch (err) {
+      setUploadError("Network error — upload failed. Check your connection.");
     }
   };
 
   const deleteFile = async (id: number) => {
     setFiles(prev => prev.filter(f => f.id !== id));
     await fetch(`/api/files/${id}`, { method: "DELETE" }).catch(() => {});
+    if (app) refreshApplication(app.id); // FIX 2
   };
 
   const viewFile = async (id: number) => {
@@ -228,12 +292,10 @@ export default function Drawer({ app, onClose, onUpdateApp }: DrawerProps) {
         const { url } = await res.json();
         window.open(url, "_blank", "noopener,noreferrer");
       }
-    } catch {
-      // silently fail
-    }
+    } catch { /* silently fail */ }
   };
 
-  // ── Reminders — POST add, DELETE remove ──────────────────
+  // ── Reminders ─────────────────────────────────────────────
   const addReminder = async (reminder: Omit<Reminder, "id">) => {
     if (!app) return;
     const tempId = Date.now();
@@ -247,6 +309,7 @@ export default function Drawer({ app, onClose, onUpdateApp }: DrawerProps) {
       if (res.ok) {
         const created: Reminder = await res.json();
         setReminders(prev => prev.map(r => r.id === tempId ? created : r));
+        refreshApplication(app.id);
       }
     } catch {
       setReminders(prev => prev.filter(r => r.id !== tempId));
@@ -256,6 +319,7 @@ export default function Drawer({ app, onClose, onUpdateApp }: DrawerProps) {
   const deleteReminder = async (id: number) => {
     setReminders(prev => prev.filter(r => r.id !== id));
     await fetch(`/api/reminders/${id}`, { method: "DELETE" }).catch(() => {});
+    if (app) refreshApplication(app.id);
   };
 
   const c = app ? STATUS_COLORS[app.status] ?? STATUS_COLORS.Applied : STATUS_COLORS.Applied;
@@ -329,11 +393,12 @@ export default function Drawer({ app, onClose, onUpdateApp }: DrawerProps) {
         }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
             <div>
-              <div className="font-['Syne']" style={{
+              <div style={{
                 fontSize: 22, fontWeight: 900,
                 background: "linear-gradient(90deg, #4f8ef7, #22d3ee, #a78bfa)",
                 WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent",
                 filter: "drop-shadow(0 2px 8px rgba(79,142,247,0.4))",
+                fontFamily: "'Syne', sans-serif",
               }}>
                 {app?.company}
               </div>
@@ -367,33 +432,30 @@ export default function Drawer({ app, onClose, onUpdateApp }: DrawerProps) {
               <button
                 onClick={onClose}
                 style={{
-                  width: 44, height: 44, borderRadius: 14,
-                  background: "rgba(24,28,38,0.7)", border: "2px solid rgba(45,51,82,0.6)",
-                  color: "#a1a8c6", fontSize: 18, cursor: "pointer",
+                  width: 36, height: 36, borderRadius: 10,
+                  background: "rgba(255,255,255,0.05)",
+                  border: "1px solid rgba(255,255,255,0.1)",
+                  color: "#a1a8c6", cursor: "pointer", fontSize: 18,
                   display: "flex", alignItems: "center", justifyContent: "center",
                   transition: "all 200ms ease",
                 }}
                 onMouseEnter={e => {
-                  (e.currentTarget as HTMLButtonElement).style.background = "rgba(79,142,247,0.3)";
-                  (e.currentTarget as HTMLButtonElement).style.color = "#4f8ef7";
-                  (e.currentTarget as HTMLButtonElement).style.borderColor = "rgba(79,142,247,0.5)";
-                  (e.currentTarget as HTMLButtonElement).style.transform = "rotate(90deg) scale(1.1)";
+                  (e.currentTarget as HTMLButtonElement).style.background = "rgba(248,113,113,0.15)";
+                  (e.currentTarget as HTMLButtonElement).style.color = "#f87171";
                 }}
                 onMouseLeave={e => {
-                  (e.currentTarget as HTMLButtonElement).style.background = "rgba(24,28,38,0.7)";
+                  (e.currentTarget as HTMLButtonElement).style.background = "rgba(255,255,255,0.05)";
                   (e.currentTarget as HTMLButtonElement).style.color = "#a1a8c6";
-                  (e.currentTarget as HTMLButtonElement).style.borderColor = "rgba(45,51,82,0.6)";
-                  (e.currentTarget as HTMLButtonElement).style.transform = "rotate(0deg) scale(1)";
                 }}
               >✕</button>
             </div>
           </div>
         </div>
 
-        {/* ── Status & Tabs ── */}
+        {/* ── Status + Tabs ── */}
         <div style={{
-          padding: "20px 28px",
-          borderBottom: "1px solid rgba(35,40,64,0.5)", flexShrink: 0,
+          padding: "20px 28px 0",
+          background: "rgba(19,22,30,0.8)", flexShrink: 0,
           transform: contentReady ? "translateY(0)" : "translateY(-8px)",
           opacity: contentReady ? 1 : 0,
           transition: "transform 300ms cubic-bezier(0.34,1.56,0.64,1) 100ms, opacity 280ms ease 100ms",
@@ -452,60 +514,77 @@ export default function Drawer({ app, onClose, onUpdateApp }: DrawerProps) {
           transform: contentReady ? "translateY(0)" : "translateY(16px)",
           transition: "opacity 360ms ease 160ms, transform 360ms cubic-bezier(0.34,1.2,0.64,1) 160ms",
         }}>
-          {/* Timeline */}
-          <AnimatedSection title="📅 Timeline" delay={0} contentReady={contentReady}>
-            <div style={{ display: "flex", flexDirection: "column", gap: 0 }}>
-              {TIMELINE_STAGES.map((stage, i) => {
-                const done = i <= currentStageIdx && app?.status !== "Rejected";
-                return <TimelineRow key={stage} stage={stage} done={done} i={i} total={TIMELINE_STAGES.length} app={app} />;
-              })}
+          {/* FIX 1: Loading spinner while fetching drawer data */}
+          {drawerLoading ? (
+            <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: "60px 0", gap: 16 }}>
+              <div style={{
+                width: 36, height: 36, borderRadius: "50%",
+                border: "3px solid rgba(79,142,247,0.2)", borderTopColor: "#4f8ef7",
+                animation: "spin 0.8s linear infinite",
+              }} />
+              <span style={{ color: "#a1a8c6", fontSize: 13 }}>Loading data…</span>
             </div>
-          </AnimatedSection>
+          ) : (
+            <>
+              {/* Timeline */}
+              <AnimatedSection title="📅 Timeline" delay={0} contentReady={contentReady}>
+                <div style={{ display: "flex", flexDirection: "column", gap: 0 }}>
+                  {TIMELINE_STAGES.map((stage, i) => {
+                    const done = i <= currentStageIdx && app?.status !== "Rejected";
+                    return <TimelineRow key={stage} stage={stage} done={done} i={i} total={TIMELINE_STAGES.length} app={app} />;
+                  })}
+                </div>
+              </AnimatedSection>
 
-          {/* Tab content */}
-          <div style={{ marginTop: 24 }}>
-            {activeTab === "tasks" && (
-              <TasksTab
-                tasks={tasks}
-                onToggle={toggleTask}
-                onDelete={deleteTask}
-                onAddTask={() => setShowAddTask(true)}
-                showAddTask={showAddTask}
-                newTaskText={newTaskText}
-                onNewTaskChange={setNewTaskText}
-                onAddNewTask={addTask}
-                onCancelAddTask={() => { setNewTaskText(""); setShowAddTask(false); }}
-                contentReady={contentReady}
-              />
-            )}
-            {activeTab === "files" && (
-              <FilesTab
-                files={files}
-                onDelete={deleteFile}
-                onView={viewFile}
-                onUpload={uploadFile}
-                contentReady={contentReady}
-              />
-            )}
-            {activeTab === "notes" && (
-              <NotesTab
-                notes={notes}
-                onChange={setNotes}
-                onSave={saveNotes}
-                saving={notesSaving}
-                saved={notesSaved}
-                contentReady={contentReady}
-              />
-            )}
-            {activeTab === "reminders" && (
-              <RemindersTab
-                reminders={reminders}
-                onDelete={deleteReminder}
-                onAdd={addReminder}
-                contentReady={contentReady}
-              />
-            )}
-          </div>
+              {/* Tab content */}
+              <div style={{ marginTop: 24 }}>
+                {activeTab === "tasks" && (
+                  <TasksTab
+                    tasks={tasks}
+                    onToggle={toggleTask}
+                    onDelete={deleteTask}
+                    onAddTask={() => setShowAddTask(true)}
+                    showAddTask={showAddTask}
+                    newTaskText={newTaskText}
+                    onNewTaskChange={setNewTaskText}
+                    onAddNewTask={addTask}
+                    onCancelAddTask={() => { setNewTaskText(""); setShowAddTask(false); }}
+                    contentReady={contentReady}
+                  />
+                )}
+                {activeTab === "files" && (
+                  <FilesTab
+                    files={files}
+                    onDelete={deleteFile}
+                    onView={viewFile}
+                    onUpload={uploadFile}
+                    uploadError={uploadError}
+                    onClearError={() => setUploadError(null)}
+                    contentReady={contentReady}
+                  />
+                )}
+                {activeTab === "notes" && (
+                  <NotesTab
+                    notes={notes}
+                    onChange={setNotes}
+                    onSave={saveNotes}
+                    saving={notesSaving}
+                    saved={notesSaved}
+                    noteHistory={noteHistory}
+                    contentReady={contentReady}
+                  />
+                )}
+                {activeTab === "reminders" && (
+                  <RemindersTab
+                    reminders={reminders}
+                    onDelete={deleteReminder}
+                    onAdd={addReminder}
+                    contentReady={contentReady}
+                  />
+                )}
+              </div>
+            </>
+          )}
         </div>
       </aside>
 
@@ -518,6 +597,7 @@ export default function Drawer({ app, onClose, onUpdateApp }: DrawerProps) {
           from { opacity: 0; transform: scale(0.92); }
           to   { opacity: 1; transform: scale(1); }
         }
+        @keyframes spin { to { transform: rotate(360deg); } }
       `}</style>
     </>
   );
@@ -618,6 +698,11 @@ function TasksTab({ tasks, onToggle, onDelete, onAddTask, showAddTask, newTaskTe
   return (
     <AnimatedSection title={`✅ Tasks • ${completed}/${tasks.length}`} delay={80} contentReady={contentReady}>
       <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+        {tasks.length === 0 && !showAddTask && (
+          <div style={{ textAlign: "center", padding: "24px 0", color: "rgba(255,255,255,0.25)", fontSize: 13 }}>
+            No tasks yet
+          </div>
+        )}
         {tasks.map((task, i) => (
           <div key={task.id} style={{ animation: `fadeSlideUp 280ms cubic-bezier(0.34,1.2,0.64,1) ${i * 40}ms both` }}>
             <TaskItem task={task} onToggle={() => onToggle(task.id)} onDelete={() => onDelete(task.id)} />
@@ -767,18 +852,36 @@ function TaskItem({ task, onToggle, onDelete }: { task: Task; onToggle: () => vo
 }
 
 /* ─── Files Tab ─── */
-function FilesTab({ files, onDelete, onView, onUpload, contentReady }: {
+function FilesTab({ files, onDelete, onView, onUpload, uploadError, onClearError, contentReady }: {
   files: AppFile[];
   onDelete: (id: number) => void;
   onView: (id: number) => void;
   onUpload: (file: File) => void;
+  uploadError: string | null; // FIX 6
+  onClearError: () => void;   // FIX 6
   contentReady: boolean;
 }) {
   return (
     <AnimatedSection title="📁 Files & Documents" delay={80} contentReady={contentReady}>
       <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+        {/* FIX 6: Show upload error */}
+        {uploadError && (
+          <div style={{
+            padding: "12px 16px", borderRadius: 12,
+            background: "rgba(248,113,113,0.1)", border: "1px solid rgba(248,113,113,0.4)",
+            color: "#f87171", fontSize: 13, display: "flex", alignItems: "center", justifyContent: "space-between",
+          }}>
+            <span>⚠ {uploadError}</span>
+            <button onClick={onClearError} style={{ background: "none", border: "none", color: "#f87171", cursor: "pointer", fontSize: 16 }}>✕</button>
+          </div>
+        )}
+        {files.length === 0 && (
+          <div style={{ textAlign: "center", padding: "24px 0", color: "rgba(255,255,255,0.25)", fontSize: 13 }}>
+            No files uploaded yet
+          </div>
+        )}
         {files.map((file, i) => (
-          <div key={file.id} style={{ animation: `fadeSlideUp 280ms cubic-bezier(0.34,1.2,0.64,1) ${i * 50}ms both` }}>
+          <div key={file.id} style={{ animation: `fadeSlideUp 280ms cubic-bezier(0.34,1.2,0.64,1) ${i * 40}ms both` }}>
             <FileItem file={file} onDelete={() => onDelete(file.id)} onView={() => onView(file.id)} />
           </div>
         ))}
@@ -788,16 +891,12 @@ function FilesTab({ files, onDelete, onView, onUpload, contentReady }: {
   );
 }
 
+/* FIX 3: FileItem now shows uploaded_at date */
 function FileItem({ file, onDelete, onView }: { file: AppFile; onDelete: () => void; onView: () => void }) {
   const [hovered, setHovered] = useState(false);
-  // Support both DB shape and legacy mock shape
-  const displayType  = file.file_type || file.type || "doc";
-  const displaySize  = file.size_bytes ? formatBytes(file.size_bytes) : (file.size || "");
-  const displayDate  = file.uploaded_at
-    ? new Date(file.uploaded_at).toLocaleDateString("en-GB", { day: "2-digit", month: "short" })
-    : (file.uploadedAt || "");
-  const icon = file.icon || fileIcon(displayType);
-
+  const icon = file.file_type ? fileIcon(file.file_type) : (file.icon ?? "📁");
+  const sizeDisplay = file.size_bytes !== undefined ? formatBytes(file.size_bytes) : (file.size ?? "");
+  const dateDisplay = file.uploaded_at ? formatUploadDate(file.uploaded_at) : "";
   return (
     <div
       onMouseEnter={() => setHovered(true)}
@@ -806,41 +905,48 @@ function FileItem({ file, onDelete, onView }: { file: AppFile; onDelete: () => v
         display: "flex", alignItems: "center", gap: 14, padding: "14px 16px",
         borderRadius: 14,
         background: hovered ? "rgba(79,142,247,0.08)" : "rgba(24,28,38,0.7)",
-        border: `1px solid ${hovered ? "rgba(79,142,247,0.45)" : "rgba(45,51,82,0.5)"}`,
+        border: `1px solid ${hovered ? "rgba(79,142,247,0.4)" : "rgba(45,51,82,0.5)"}`,
         boxShadow: hovered ? "0 4px 20px rgba(79,142,247,0.15)" : "none",
-        transition: "all 220ms ease",
+        transition: "all 220ms cubic-bezier(0.34,1.2,0.64,1)",
       }}
     >
-      <span style={{ fontSize: 24, flexShrink: 0 }}>{icon}</span>
+      <div style={{
+        width: 46, height: 46, borderRadius: 12, flexShrink: 0,
+        background: "linear-gradient(135deg, rgba(79,142,247,0.25), rgba(167,139,250,0.25))",
+        display: "flex", alignItems: "center", justifyContent: "center", fontSize: 22,
+        transform: hovered ? "scale(1.1) rotate(-4deg)" : "scale(1) rotate(0deg)",
+        transition: "transform 260ms cubic-bezier(0.34,1.56,0.64,1)",
+      }}>
+        {icon}
+      </div>
       <div style={{ flex: 1, minWidth: 0 }}>
-        <p style={{ fontSize: 14, fontWeight: 600, color: "#e8eaf2", margin: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-          {file.name}
+        <h4 style={{
+          fontSize: 14, fontWeight: 600, color: "#e8eaf2", margin: "0 0 2px",
+          whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
+        }}>{file.name}</h4>
+        {/* FIX 3: show size AND upload date */}
+        <p style={{ fontSize: 12, color: "#a1a8c6", margin: 0 }}>
+          {sizeDisplay}{sizeDisplay && dateDisplay ? " · " : ""}{dateDisplay}
         </p>
-        <div style={{ display: "flex", gap: 8, fontSize: 12, color: "#a1a8c6", marginTop: 2 }}>
-          {displaySize && <span>{displaySize}</span>}
-          {displaySize && <span>•</span>}
-          <span>{displayType.toUpperCase()}</span>
-          {displayDate && <><span>•</span><span>{displayDate}</span></>}
-        </div>
       </div>
       <div style={{ display: "flex", gap: 8, opacity: hovered ? 1 : 0, transition: "opacity 180ms ease" }}>
         <button
           onClick={onView}
-          style={{ padding: "6px 12px", background: "rgba(79,142,247,0.2)", border: "1px solid rgba(79,142,247,0.4)", color: "#4f8ef7", borderRadius: 10, fontSize: 12, fontWeight: 700, cursor: "pointer" }}
-        >View</button>
+          style={{ width: 36, height: 36, background: "rgba(79,142,247,0.25)", border: "1px solid rgba(79,142,247,0.45)", color: "#4f8ef7", borderRadius: 10, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}
+        >👁️</button>
         <button
           onClick={onDelete}
-          style={{ width: 34, height: 34, background: "rgba(248,113,113,0.2)", border: "1px solid rgba(248,113,113,0.4)", color: "#f87171", borderRadius: 10, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}
+          style={{ width: 36, height: 36, background: "rgba(248,113,113,0.25)", border: "1px solid rgba(248,113,113,0.45)", color: "#f87171", borderRadius: 10, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}
         >🗑️</button>
       </div>
     </div>
   );
 }
 
-/* ─── Upload Drop Zone — fully wired ─── */
+/* ─── Upload Drop Zone ─── */
 function UploadDropZone({ onUpload }: { onUpload: (file: File) => void }) {
-  const [dragOver,   setDragOver]   = useState(false);
-  const [uploading,  setUploading]  = useState(false);
+  const [dragOver,  setDragOver]  = useState(false);
+  const [uploading, setUploading] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
   const handleFiles = async (fileList: FileList | null) => {
@@ -850,6 +956,7 @@ function UploadDropZone({ onUpload }: { onUpload: (file: File) => void }) {
       await onUpload(file);
     }
     setUploading(false);
+    if (inputRef.current) inputRef.current.value = "";
   };
 
   return (
@@ -887,19 +994,28 @@ function UploadDropZone({ onUpload }: { onUpload: (file: File) => void }) {
         borderRadius: 16, display: "flex", alignItems: "center", justifyContent: "center",
         margin: "0 auto 12px", fontSize: 22,
         transform: dragOver ? "scale(1.2) translateY(-4px)" : "scale(1)",
-        transition: "transform 300ms cubic-bezier(0.34,1.56,0.64,1)",
+        transition: "transform 220ms cubic-bezier(0.34,1.56,0.64,1)",
       }}>
-        {uploading ? "⏳" : "⬆"}
+        {uploading ? (
+          <div style={{
+            width: 22, height: 22, borderRadius: "50%",
+            border: "2px solid rgba(79,142,247,0.3)", borderTopColor: "#4f8ef7",
+            animation: "spin 0.8s linear infinite",
+          }} />
+        ) : "📎"}
       </div>
-      <h4 style={{ fontSize: 15, fontWeight: 700, color: "#e8eaf2", margin: "0 0 4px" }}>
-        {uploading ? "Uploading…" : "Drop files here"}
-      </h4>
-      <p style={{ fontSize: 13, color: "#a1a8c6", margin: "0 0 16px" }}>PDF, DOC, Images (Max 10MB)</p>
+      <p style={{ color: "#a1a8c6", fontSize: 14, fontWeight: 600, margin: "0 0 6px" }}>
+        {uploading ? "Uploading…" : dragOver ? "Drop files here" : "Drag & drop or click to upload"}
+      </p>
+      <p style={{ color: "rgba(255,255,255,0.25)", fontSize: 12, margin: 0 }}>
+        PDF, DOC, images supported
+      </p>
       {!uploading && (
         <button
           onClick={e => { e.stopPropagation(); inputRef.current?.click(); }}
           style={{
-            padding: "8px 20px", background: "linear-gradient(135deg, #4f8ef7, #3b7ef0)",
+            marginTop: 14, padding: "8px 20px",
+            background: "linear-gradient(135deg, #4f8ef7, #3b7ef0)",
             color: "#fff", borderRadius: 10, fontWeight: 700, fontSize: 13,
             border: "none", cursor: "pointer", boxShadow: "0 4px 12px rgba(79,142,247,0.3)",
             transition: "all 200ms ease",
@@ -912,21 +1028,25 @@ function UploadDropZone({ onUpload }: { onUpload: (file: File) => void }) {
   );
 }
 
-/* ─── Notes Tab — with working Save ─── */
-function NotesTab({ notes, onChange, onSave, saving, saved, contentReady }: {
+/* ─── Notes Tab — with history ─── */
+/* FIX 4+5: shows textarea + date-stamped history below */
+function NotesTab({ notes, onChange, onSave, saving, saved, noteHistory, contentReady }: {
   notes: string;
   onChange: (n: string) => void;
   onSave: () => void;
   saving: boolean;
   saved: boolean;
+  noteHistory: NoteHistoryEntry[];
   contentReady: boolean;
 }) {
+  const [showHistory, setShowHistory] = useState(false);
+
   return (
     <AnimatedSection title="📝 Interview Notes" delay={80} contentReady={contentReady}>
       <textarea
         value={notes}
         onChange={e => onChange(e.target.value)}
-        placeholder="Write detailed notes about your interview experience..."
+        placeholder="Write detailed notes about your interview experience, questions asked, your answers, feedback received..."
         rows={8}
         style={{
           width: "100%", boxSizing: "border-box",
@@ -934,6 +1054,7 @@ function NotesTab({ notes, onChange, onSave, saving, saved, contentReady }: {
           borderRadius: 16, padding: "16px 18px", fontSize: 15, color: "#e8eaf2",
           resize: "none", outline: "none", fontFamily: "inherit",
           transition: "border-color 250ms ease, box-shadow 250ms ease",
+          lineHeight: 1.6,
         }}
         onFocus={e => {
           e.currentTarget.style.borderColor = "rgba(79,142,247,0.6)";
@@ -950,9 +1071,7 @@ function NotesTab({ notes, onChange, onSave, saving, saved, contentReady }: {
           disabled={saving}
           style={{
             flex: 1, padding: "12px 24px",
-            background: saved
-              ? "linear-gradient(135deg, #10b981, #059669)"
-              : "linear-gradient(135deg, #10b981, #059669)",
+            background: "linear-gradient(135deg, #10b981, #059669)",
             color: "#fff", borderRadius: 12, fontWeight: 700, fontSize: 14,
             border: "none", cursor: saving ? "not-allowed" : "pointer",
             boxShadow: "0 4px 16px rgba(16,185,129,0.3)",
@@ -975,7 +1094,61 @@ function NotesTab({ notes, onChange, onSave, saving, saved, contentReady }: {
           ) : saved ? "✓ Saved!" : "💾 Save Notes"}
         </button>
       </div>
-      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+
+      {/* FIX 5: Note history section */}
+      {noteHistory.length > 0 && (
+        <div style={{ marginTop: 24 }}>
+          <button
+            onClick={() => setShowHistory(prev => !prev)}
+            style={{
+              width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between",
+              padding: "10px 14px", borderRadius: 12,
+              background: "rgba(24,28,38,0.5)", border: "1px solid rgba(45,51,82,0.4)",
+              color: "#a1a8c6", fontSize: 13, fontWeight: 600, cursor: "pointer",
+              transition: "all 200ms ease",
+            }}
+            onMouseEnter={e => (e.currentTarget as HTMLButtonElement).style.borderColor = "rgba(79,142,247,0.4)"}
+            onMouseLeave={e => (e.currentTarget as HTMLButtonElement).style.borderColor = "rgba(45,51,82,0.4)"}
+          >
+            <span>🕘 Note history ({noteHistory.length} saves)</span>
+            <span style={{ transition: "transform 200ms ease", transform: showHistory ? "rotate(180deg)" : "rotate(0deg)" }}>▾</span>
+          </button>
+
+          {showHistory && (
+            <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 10 }}>
+              {noteHistory.map((entry, i) => (
+                <div
+                  key={entry.id}
+                  style={{
+                    padding: "14px 16px", borderRadius: 14,
+                    background: "rgba(24,28,38,0.6)", border: "1px solid rgba(45,51,82,0.4)",
+                    animation: `fadeSlideUp 240ms ease ${i * 40}ms both`,
+                  }}
+                >
+                  <div style={{
+                    fontSize: 11, color: "#4f8ef7", fontWeight: 700,
+                    marginBottom: 8, display: "flex", alignItems: "center", gap: 6,
+                  }}>
+                    <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#4f8ef7", display: "inline-block" }} />
+                    {new Date(entry.saved_at).toLocaleString("en-GB", {
+                      day: "2-digit", month: "short", year: "numeric",
+                      hour: "2-digit", minute: "2-digit",
+                    })}
+                  </div>
+                  <p style={{
+                    fontSize: 13, color: "rgba(255,255,255,0.6)", margin: 0,
+                    whiteSpace: "pre-wrap", lineHeight: 1.6,
+                    maxHeight: 80, overflow: "hidden",
+                    maskImage: "linear-gradient(to bottom, black 60%, transparent 100%)",
+                  }}>
+                    {entry.content}
+                  </p>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
     </AnimatedSection>
   );
 }
@@ -989,12 +1162,10 @@ function RemindersTab({ reminders, onDelete, onAdd, contentReady }: {
 }) {
   const [showForm, setShowForm] = useState(false);
   const [title,    setTitle]    = useState("");
-  // Store raw input values (for the <input type="date/time"> controls)
-  const [rawDate,  setRawDate]  = useState("");   // "yyyy-mm-dd"
-  const [rawTime,  setRawTime]  = useState("");   // "HH:MM"
+  const [rawDate,  setRawDate]  = useState("");
+  const [rawTime,  setRawTime]  = useState("");
   const [type,     setType]     = useState<Reminder["type"]>("followup");
 
-  // Derived display strings sent to API
   const displayDate = rawDate
     ? new Date(rawDate + "T00:00:00").toLocaleDateString("en-GB", { day: "2-digit", month: "short" })
     : "";
@@ -1037,7 +1208,6 @@ function RemindersTab({ reminders, onDelete, onAdd, contentReady }: {
             display: "flex", flexDirection: "column", gap: 10,
             animation: "fadeSlideUp 220ms cubic-bezier(0.34,1.56,0.64,1) both",
           }}>
-            {/* Title */}
             <input
               autoFocus
               value={title}
@@ -1051,8 +1221,6 @@ function RemindersTab({ reminders, onDelete, onAdd, contentReady }: {
               onFocus={e => (e.currentTarget.style.borderColor = "rgba(167,139,250,0.5)")}
               onBlur={e  => (e.currentTarget.style.borderColor = "rgba(45,51,82,0.5)")}
             />
-
-            {/* Date + Time row — keep raw HTML values, derive display on submit */}
             <div style={{ display: "flex", gap: 8 }}>
               <input
                 type="date"
@@ -1075,15 +1243,11 @@ function RemindersTab({ reminders, onDelete, onAdd, contentReady }: {
                 }}
               />
             </div>
-
-            {/* Preview row */}
             {(displayDate || displayTime) && (
               <div style={{ fontSize: 12, color: "rgba(167,139,250,0.7)", padding: "4px 2px" }}>
                 📅 {displayDate || "—"} &nbsp;·&nbsp; 🕐 {displayTime || "—"}
               </div>
             )}
-
-            {/* Type selector */}
             <div style={{ display: "flex", gap: 6 }}>
               {(["interview", "deadline", "followup"] as Reminder["type"][]).map(t => (
                 <button
@@ -1102,8 +1266,6 @@ function RemindersTab({ reminders, onDelete, onAdd, contentReady }: {
                 </button>
               ))}
             </div>
-
-            {/* Action buttons */}
             <div style={{ display: "flex", gap: 8 }}>
               <button
                 onClick={handleAdd}

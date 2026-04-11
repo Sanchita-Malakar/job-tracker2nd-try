@@ -1,60 +1,82 @@
 // ============================================================
 //  app/api/files/[fileId]/route.ts
-//  GET    → generate a 60-second signed URL for viewing/download
-//  DELETE → remove file from Storage + delete metadata row
+//
+//  GET    → return a short-lived signed URL to view/download the file
+//  DELETE → remove DB record + storage object
 // ============================================================
-
 
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 
-interface Params { params: { fileId: string } }
+interface Params { params: Promise<{ fileId: string }> }
 
+const BUCKET_NAME = "app-files"; // must match files/route.ts
+
+// GET /api/files/:fileId  → signed URL
 export async function GET(_req: Request, { params }: Params) {
+  const { fileId } = await params;
   const supabase = await createClient();
   const { data: { user }, error: authErr } = await supabase.auth.getUser();
   if (authErr || !user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const { data: fileMeta, error: metaErr } = await supabase
+  const { data: file, error: fetchErr } = await supabase
     .from("app_files")
     .select("storage_path, name")
-    .eq("id", Number(params.fileId))
+    .eq("id", Number(fileId))
     .eq("user_id", user.id)
     .single();
 
-  if (metaErr || !fileMeta) return NextResponse.json({ error: "File not found" }, { status: 404 });
+  if (fetchErr || !file) {
+    return NextResponse.json({ error: "File not found" }, { status: 404 });
+  }
 
   const { data: signed, error: signErr } = await supabase.storage
-    .from("app-files")
-    .createSignedUrl(fileMeta.storage_path, 60);
+    .from(BUCKET_NAME)
+    .createSignedUrl(file.storage_path, 60 * 60); // 1-hour expiry
 
-  if (signErr || !signed) return NextResponse.json({ error: "Could not generate URL" }, { status: 500 });
+  if (signErr || !signed) {
+    console.error("[GET /files/:id] Signed URL error:", signErr);
+    return NextResponse.json({ error: "Could not generate file URL" }, { status: 500 });
+  }
 
-  return NextResponse.json({ url: signed.signedUrl, name: fileMeta.name });
+  return NextResponse.json({ url: signed.signedUrl, name: file.name });
 }
 
+// DELETE /api/files/:fileId
 export async function DELETE(_req: Request, { params }: Params) {
+  const { fileId } = await params;
   const supabase = await createClient();
   const { data: { user }, error: authErr } = await supabase.auth.getUser();
   if (authErr || !user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const { data: fileMeta, error: metaErr } = await supabase
+  // Fetch storage_path before deleting
+  const { data: file, error: fetchErr } = await supabase
     .from("app_files")
     .select("storage_path")
-    .eq("id", Number(params.fileId))
+    .eq("id", Number(fileId))
     .eq("user_id", user.id)
     .single();
 
-  if (metaErr || !fileMeta) return NextResponse.json({ error: "File not found" }, { status: 404 });
+  if (fetchErr || !file) {
+    return NextResponse.json({ error: "File not found" }, { status: 404 });
+  }
 
-  await supabase.storage.from("app-files").remove([fileMeta.storage_path]);
+  // Remove from storage first
+  const { error: storageErr } = await supabase.storage
+    .from(BUCKET_NAME)
+    .remove([file.storage_path]);
 
-  const { error } = await supabase
+  if (storageErr) {
+    console.error("[DELETE /files/:id] Storage remove error:", storageErr);
+    // Continue to delete DB record even if storage fails
+  }
+
+  const { error: dbErr } = await supabase
     .from("app_files")
     .delete()
-    .eq("id", Number(params.fileId))
+    .eq("id", Number(fileId))
     .eq("user_id", user.id);
 
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+  if (dbErr) return NextResponse.json({ error: dbErr.message }, { status: 500 });
   return NextResponse.json({ success: true });
 }
