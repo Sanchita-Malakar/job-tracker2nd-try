@@ -1,5 +1,5 @@
 "use client";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import Link from "next/link";
 import { useSession } from "@/components/SessionProvider";
@@ -28,35 +28,38 @@ const BOTTOM_ITEMS = [
 const W_OPEN   = 240;
 const W_CLOSED = 68;
 
+// ── Helper: set CSS variable only (safe inside setState) ────
+function setCSSWidth(w: number) {
+  document.documentElement.style.setProperty("--sidebar-w", `${w}px`);
+}
+
+// ── Helper: dispatch width event OUTSIDE render cycle ────────
+// Uses setTimeout(0) so it never fires during a React setState updater,
+// which would cause "Cannot update a component while rendering" errors.
+function dispatchWidthEvent(w: number) {
+  setTimeout(() => {
+    window.dispatchEvent(new CustomEvent("sidebar:width", { detail: w }));
+  }, 0);
+}
+
 export default function Sidebar() {
   const pathname = usePathname();
   const router   = useRouter();
   const { profile } = useSession();
-  const [mounted, setMounted] = useState(false);
-  const [open, setOpen] = useState(true);
+  const [mounted,       setMounted]       = useState(false);
+  const [open,          setOpen]          = useState(true);
   const [activeSection, setActiveSection] = useState<PageSection>("dashboard");
 
+  // ── Drag-to-resize state ─────────────────────────────────
+  const [dragging,    setDragging]    = useState(false);
+  const [dragWidth,   setDragWidth]   = useState<number | null>(null);
+  const dragStartX    = useRef(0);
+  const dragStartW    = useRef(W_OPEN);
+  const asideRef      = useRef<HTMLElement>(null);
+
+  // ── Inject global styles once ────────────────────────────
   useEffect(() => {
     setMounted(true);
-    const handleToggle = () => setOpen(prev => {
-      const next = !prev;
-      document.documentElement.style.setProperty("--sidebar-w", next ? "240px" : "68px");
-      return next;
-    });
-    window.addEventListener("sidebar:toggle", handleToggle);
-    return () => window.removeEventListener("sidebar:toggle", handleToggle);
-  }, []);
-
-  useEffect(() => {
-    const handler = (e: Event) => {
-      const section = (e as CustomEvent<PageSection>).detail;
-      setActiveSection(section);
-    };
-    window.addEventListener("page:section", handler);
-    return () => window.removeEventListener("page:section", handler);
-  }, []);
-
-  useEffect(() => {
     const id = "sidebar-offset-style";
     if (!document.getElementById(id)) {
       const el = document.createElement("style");
@@ -67,6 +70,10 @@ export default function Sidebar() {
           margin-left: var(--sidebar-w) !important;
           transition: margin-left 0.35s cubic-bezier(0.4,0,0.2,1);
         }
+        /* Suppress transition while drag-resizing for real-time feel */
+        .sidebar-offset.sidebar-dragging {
+          transition: none !important;
+        }
         @keyframes sb-pulse {
           0%,100% { opacity:1; transform:scale(1); }
           50%      { opacity:0.55; transform:scale(1.35); }
@@ -74,7 +81,95 @@ export default function Sidebar() {
       `;
       document.head.appendChild(el);
     }
+    // Ensure initial CSS variable matches state
+    setCSSWidth(W_OPEN);
+    dispatchWidthEvent(W_OPEN);
   }, []);
+
+  // ── Listen for external toggle (from TopNav hamburger) ───
+  useEffect(() => {
+    const handleToggle = () => {
+      // We need the current open state; read it via functional updater
+      // but do NOT dispatch events inside the updater — do it after.
+      setOpen(prev => {
+        const next = !prev;
+        const w = next ? W_OPEN : W_CLOSED;
+        setDragWidth(null);
+        setCSSWidth(w);          // safe: just sets a CSS var, no React state
+        dispatchWidthEvent(w);   // deferred via setTimeout(0) — safe
+        return next;
+      });
+    };
+    window.addEventListener("sidebar:toggle", handleToggle);
+    return () => window.removeEventListener("sidebar:toggle", handleToggle);
+  }, []);
+
+  // ── Listen for page section events ───────────────────────
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const section = (e as CustomEvent<PageSection>).detail;
+      setActiveSection(section);
+    };
+    window.addEventListener("page:section", handler);
+    return () => window.removeEventListener("page:section", handler);
+  }, []);
+
+  // ── Drag-to-resize handlers ───────────────────────────────
+  const onDragStart = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    dragStartX.current = e.clientX;
+    dragStartW.current = dragWidth ?? (open ? W_OPEN : W_CLOSED);
+    setDragging(true);
+    // Suppress transition on content while dragging
+    document.querySelectorAll(".sidebar-offset").forEach(el =>
+      el.classList.add("sidebar-dragging")
+    );
+  }, [open, dragWidth]);
+
+  useEffect(() => {
+    if (!dragging) return;
+
+    const onMouseMove = (e: MouseEvent) => {
+      const delta = e.clientX - dragStartX.current;
+      const raw   = dragStartW.current + delta;
+      const clamped = Math.max(W_CLOSED, Math.min(360, raw));
+      setDragWidth(clamped);
+      setCSSWidth(clamped);          // instant CSS update, no event dispatch
+      dispatchWidthEvent(clamped);   // deferred — safe even in rapid mousemove
+    };
+
+    const onMouseUp = (e: MouseEvent) => {
+      setDragging(false);
+      document.querySelectorAll(".sidebar-offset").forEach(el =>
+        el.classList.remove("sidebar-dragging")
+      );
+      const delta   = e.clientX - dragStartX.current;
+      const raw     = dragStartW.current + delta;
+      const clamped = Math.max(W_CLOSED, Math.min(360, raw));
+
+      if (clamped < (W_OPEN + W_CLOSED) / 2) {
+        setOpen(false);
+        setDragWidth(null);
+        setCSSWidth(W_CLOSED);
+        dispatchWidthEvent(W_CLOSED);
+      } else {
+        setOpen(true);
+        setDragWidth(clamped);
+        setCSSWidth(clamped);
+        dispatchWidthEvent(clamped);
+      }
+    };
+
+    window.addEventListener("mousemove", onMouseMove);
+    window.addEventListener("mouseup",   onMouseUp);
+    return () => {
+      window.removeEventListener("mousemove", onMouseMove);
+      window.removeEventListener("mouseup",   onMouseUp);
+    };
+  }, [dragging]);
+
+  const currentW = dragWidth ?? (open ? W_OPEN : W_CLOSED);
+  const isOpen   = currentW > (W_OPEN + W_CLOSED) / 2;
 
   const dispatchSection = (section: PageSection) => {
     setActiveSection(section);
@@ -95,8 +190,6 @@ export default function Sidebar() {
   if (!mounted) return null;
 
   const isHomePage = pathname === "/" || pathname === "/dashboard" || pathname === "/applications";
-
-  // Derive display name & initials from profile
   const displayName = profile?.name || "User";
   const initials = displayName
     .split(" ")
@@ -111,21 +204,24 @@ export default function Sidebar() {
 
   return (
     <aside
+      ref={asideRef}
       style={{
         position: "fixed",
         top: 0, left: 0,
         zIndex: 999,
         height: "100vh",
-        width: open ? `${W_OPEN}px` : `${W_CLOSED}px`,
+        width: `${currentW}px`,
         display: "flex",
         flexDirection: "column",
         background: "linear-gradient(180deg,#0a0c12 0%,#0d1020 100%)",
         borderRight: "1px solid rgba(79,142,247,0.12)",
-        boxShadow: open
+        boxShadow: isOpen
           ? "4px 0 40px rgba(0,0,0,0.6), inset -1px 0 0 rgba(79,142,247,0.06)"
           : "2px 0 20px rgba(0,0,0,0.5)",
-        transition: "width 0.35s cubic-bezier(0.4,0,0.2,1)",
+        // Only animate width when NOT dragging (dragging uses instant update)
+        transition: dragging ? "none" : "width 0.35s cubic-bezier(0.4,0,0.2,1)",
         overflow: "visible",
+        userSelect: dragging ? "none" : "auto",
       }}
     >
       {/* Background layer */}
@@ -147,7 +243,7 @@ export default function Sidebar() {
         }} />
       </div>
 
-      {/* ── Logo row ── */}
+      {/* ── Logo row with toggle button ── */}
       <div style={{
         position: "relative", zIndex: 1,
         height: 70, flexShrink: 0,
@@ -155,34 +251,88 @@ export default function Sidebar() {
         justifyContent: "center",
         borderBottom: "1px solid rgba(255,255,255,0.05)",
         overflow: "hidden",
-        paddingLeft: open ? "20px" : "0",
-        paddingRight: open ? "16px" : "0",
-        transition: "padding 0.35s cubic-bezier(0.4,0,0.2,1)",
+        padding: "0 10px",
+        gap: "10px",
       }}>
+
+        {/* Logo icon + text — hidden entirely when collapsed */}
         <div style={{
-          width: "36px", height: "36px", borderRadius: "10px", flexShrink: 0,
-          background: "linear-gradient(135deg,#4f8ef7 0%,#22d3ee 50%,#a78bfa 100%)",
-          display: "flex", alignItems: "center", justifyContent: "center",
-          boxShadow: "0 0 20px rgba(79,142,247,0.45)",
-          fontSize: "16px", userSelect: "none",
-        }}>
-          🚀
-        </div>
-        <span style={{
-          fontFamily: "'Syne', sans-serif", fontWeight: 800, fontSize: "16px",
-          letterSpacing: "0.4px",
-          background: "linear-gradient(90deg,#4f8ef7,#a78bfa)",
-          WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent",
-          whiteSpace: "nowrap",
-          marginLeft: "14px",
-          maxWidth: open ? "160px" : "0px",
-          opacity: open ? 1 : 0,
+          display: "flex", alignItems: "center", gap: 0,
+          // Collapse the whole logo block (icon + text) when sidebar is closed
+          maxWidth: isOpen ? "200px" : "0px",
+          opacity: isOpen ? 1 : 0,
           overflow: "hidden",
-          transition: "max-width 0.35s cubic-bezier(0.4,0,0.2,1), opacity 0.2s ease",
+          flexShrink: 1,
+          transition: dragging ? "none" : "max-width 0.35s cubic-bezier(0.4,0,0.2,1), opacity 0.2s ease",
           pointerEvents: "none",
         }}>
-          Job Tracker
-        </span>
+          <div style={{
+            width: "34px", height: "34px", borderRadius: "10px", flexShrink: 0,
+            background: "linear-gradient(135deg,#4f8ef7 0%,#22d3ee 50%,#a78bfa 100%)",
+            display: "flex", alignItems: "center", justifyContent: "center",
+            boxShadow: "0 0 20px rgba(79,142,247,0.45)",
+            fontSize: "15px", userSelect: "none",
+          }}>
+            🚀
+          </div>
+          <span style={{
+            fontFamily: "'Syne', sans-serif", fontWeight: 800, fontSize: "15px",
+            letterSpacing: "0.4px",
+            background: "linear-gradient(90deg,#4f8ef7,#a78bfa)",
+            WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent",
+            whiteSpace: "nowrap",
+            marginLeft: "11px",
+          }}>
+            Job Tracker
+          </span>
+        </div>
+
+        {/* Toggle button — always visible, centred when sidebar is collapsed */}
+        <button
+          onClick={() => {
+            const next = !open;
+            const w = next ? W_OPEN : W_CLOSED;
+            setOpen(next);
+            setDragWidth(null);
+            setCSSWidth(w);
+            dispatchWidthEvent(w);
+          }}
+          title={isOpen ? "Collapse sidebar" : "Expand sidebar"}
+          style={{
+            flexShrink: 0,
+            width: "34px", height: "34px", borderRadius: "10px",
+            background: "rgba(79,142,247,0.08)",
+            border: "1px solid rgba(79,142,247,0.2)",
+            display: "flex", flexDirection: "column",
+            alignItems: "center", justifyContent: "center",
+            gap: "5px", cursor: "pointer", outline: "none",
+            transition: "background 0.2s, box-shadow 0.2s, transform 0.15s",
+          }}
+          onMouseEnter={e => {
+            (e.currentTarget as HTMLButtonElement).style.background = "rgba(79,142,247,0.18)";
+            (e.currentTarget as HTMLButtonElement).style.boxShadow = "0 0 14px rgba(79,142,247,0.3)";
+            (e.currentTarget as HTMLButtonElement).style.transform = "scale(1.08)";
+          }}
+          onMouseLeave={e => {
+            (e.currentTarget as HTMLButtonElement).style.background = "rgba(79,142,247,0.08)";
+            (e.currentTarget as HTMLButtonElement).style.boxShadow = "none";
+            (e.currentTarget as HTMLButtonElement).style.transform = "scale(1)";
+          }}
+        >
+          {isOpen ? (
+            /* ✕ when sidebar is open */
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+              <path d="M2 2l10 10M12 2L2 12" stroke="#4f8ef7" strokeWidth="1.8" strokeLinecap="round"/>
+            </svg>
+          ) : (
+            /* ☰ hamburger when sidebar is collapsed */
+            <>
+              <span style={{ display: "block", width: "16px", height: "1.8px", borderRadius: "2px", background: "#4f8ef7" }} />
+              <span style={{ display: "block", width: "11px", height: "1.8px", borderRadius: "2px", background: "#4f8ef7" }} />
+              <span style={{ display: "block", width: "16px", height: "1.8px", borderRadius: "2px", background: "#4f8ef7" }} />
+            </>
+          )}
+        </button>
       </div>
 
       {/* ── Nav ── */}
@@ -190,10 +340,10 @@ export default function Sidebar() {
         flex: 1,
         overflowY: "auto",
         overflowX: "hidden",
-        padding: open ? "16px 12px" : "16px 8px",
+        padding: isOpen ? "16px 12px" : "16px 8px",
         display: "flex", flexDirection: "column", gap: "4px",
         scrollbarWidth: "none",
-        transition: "padding 0.35s cubic-bezier(0.4,0,0.2,1)",
+        transition: dragging ? "none" : "padding 0.35s cubic-bezier(0.4,0,0.2,1)",
         position: "relative", zIndex: 1,
       }}>
         {SECTION_ITEMS.map(item => (
@@ -201,7 +351,7 @@ export default function Sidebar() {
             key={item.section}
             item={item}
             active={isHomePage && activeSection === item.section}
-            open={open}
+            open={isOpen}
             onClick={() => dispatchSection(item.section)}
           />
         ))}
@@ -216,7 +366,7 @@ export default function Sidebar() {
             key={item.href}
             item={item}
             active={pathname === item.href}
-            open={open}
+            open={isOpen}
           />
         ))}
 
@@ -230,7 +380,7 @@ export default function Sidebar() {
             key={item.href}
             item={item}
             active={pathname === item.href}
-            open={open}
+            open={isOpen}
           />
         ))}
       </nav>
@@ -240,16 +390,16 @@ export default function Sidebar() {
         style={{
           position: "relative", zIndex: 1,
           display: "flex", alignItems: "center",
-          padding: open ? "12px 14px" : "12px 0",
+          padding: isOpen ? "12px 14px" : "12px 0",
           justifyContent: "center",
           borderTop: "1px solid rgba(255,255,255,0.05)",
           flexShrink: 0,
-          transition: "padding 0.35s cubic-bezier(0.4,0,0.2,1)",
+          transition: dragging ? "none" : "padding 0.35s cubic-bezier(0.4,0,0.2,1)",
           overflow: "hidden",
-          gap: open ? "10px" : "0",
+          gap: isOpen ? "10px" : "0",
         }}
       >
-        {/* Avatar — click to open profile */}
+        {/* Avatar */}
         <button
           onClick={handleProfileClick}
           title="Edit profile"
@@ -275,18 +425,19 @@ export default function Sidebar() {
         </button>
 
         {/* Name + sub info */}
-        <div style={{
-          maxWidth: open ? "120px" : "0px",
-          opacity: open ? 1 : 0,
-          overflow: "hidden",
-          transition: "max-width 0.35s cubic-bezier(0.4,0,0.2,1), opacity 0.2s ease",
-          pointerEvents: open ? "auto" : "none",
-          flexShrink: 0,
-          flex: 1,
-          minWidth: 0,
-          cursor: "pointer",
-        }}
-        onClick={handleProfileClick}
+        <div
+          style={{
+            maxWidth: isOpen ? "120px" : "0px",
+            opacity: isOpen ? 1 : 0,
+            overflow: "hidden",
+            transition: dragging ? "none" : "max-width 0.35s cubic-bezier(0.4,0,0.2,1), opacity 0.2s ease",
+            pointerEvents: isOpen ? "auto" : "none",
+            flexShrink: 0,
+            flex: 1,
+            minWidth: 0,
+            cursor: "pointer",
+          }}
+          onClick={handleProfileClick}
         >
           <div style={{
             fontSize: "13px", fontWeight: 600, color: "#e8eaf2",
@@ -305,7 +456,7 @@ export default function Sidebar() {
         </div>
 
         {/* Logout + online dot when open */}
-        {open && (
+        {isOpen && (
           <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
             <div style={{
               width: "6px", height: "6px", borderRadius: "50%",
@@ -339,6 +490,40 @@ export default function Sidebar() {
             </button>
           </div>
         )}
+      </div>
+
+      {/* ── Drag handle ── */}
+      <div
+        onMouseDown={onDragStart}
+        title="Drag to resize sidebar"
+        style={{
+          position: "absolute",
+          top: 0, right: -4,
+          width: 8, height: "100%",
+          cursor: "col-resize",
+          zIndex: 1000,
+          display: "flex", alignItems: "center", justifyContent: "center",
+        }}
+      >
+        {/* Visible line that appears on hover / drag */}
+        <div style={{
+          width: 2,
+          height: "100%",
+          background: dragging
+            ? "rgba(79,142,247,0.7)"
+            : "transparent",
+          transition: "background 0.2s",
+          borderRadius: 2,
+        }}
+        onMouseEnter={e => {
+          if (!dragging)
+            (e.currentTarget as HTMLDivElement).style.background = "rgba(79,142,247,0.35)";
+        }}
+        onMouseLeave={e => {
+          if (!dragging)
+            (e.currentTarget as HTMLDivElement).style.background = "transparent";
+        }}
+        />
       </div>
     </aside>
   );

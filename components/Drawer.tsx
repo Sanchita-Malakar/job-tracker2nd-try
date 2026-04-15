@@ -93,7 +93,7 @@ function formatUploadDate(dateStr: string): string {
 }
 
 export default function Drawer({ app, onClose, onUpdateApp }: DrawerProps) {
-  const { refreshApplication } = useData();
+  const { refreshApplication, setTasks: setGlobalTasks, lockTask, unlockTask } = useData();
 
   const [tasks,          setTasks]          = useState<Task[]>([]);
   const [notes,          setNotes]          = useState("");
@@ -169,16 +169,30 @@ export default function Drawer({ app, onClose, onUpdateApp }: DrawerProps) {
   const toggleTask = async (id: number) => {
     const task = tasks.find(t => t.id === id);
     if (!task) return;
-    setTasks(prev => prev.map(t => t.id === id ? { ...t, done: !t.done } : t));
+    const newDone = !task.done;
+
+    // Lock in DataContext so refreshApplication can't overwrite this optimistic update
+    lockTask(id);
+
+    // Optimistic update: local drawer state + global DataContext state
+    setTasks(prev => prev.map(t => t.id === id ? { ...t, done: newDone } : t));
+    setGlobalTasks(prev => prev.map(t => t.id === id ? { ...t, done: newDone } : t));
+
     try {
-      await fetch(`/api/tasks/${id}`, {
+      const res = await fetch(`/api/tasks/${id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ done: !task.done }),
+        body: JSON.stringify({ done: newDone }),
       });
-      if (app) refreshApplication(app.id);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      // ✅ Success — do NOT call refreshApplication here; it would overwrite the new state
     } catch {
+      // Revert both local and global state on failure
       setTasks(prev => prev.map(t => t.id === id ? { ...t, done: task.done } : t));
+      setGlobalTasks(prev => prev.map(t => t.id === id ? { ...t, done: task.done } : t));
+    } finally {
+      // Unlock so future refreshApplication calls can update this task normally
+      unlockTask(id);
     }
   };
 
@@ -187,7 +201,13 @@ export default function Drawer({ app, onClose, onUpdateApp }: DrawerProps) {
     const dueDate = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000)
       .toLocaleDateString("en-GB", { day: "2-digit", month: "short" });
     const tempId = Date.now();
-    setTasks(prev => [{ id: tempId, text: newTaskText.trim(), done: false, due_date: dueDate }, ...prev]);
+    const tempTask = { id: tempId, text: newTaskText.trim(), done: false, due_date: dueDate };
+
+    // Optimistic update: drawer local state
+    setTasks(prev => [tempTask, ...prev]);
+    // Also update global DataContext so tasks page reflects it immediately with correct application_id
+    setGlobalTasks(prev => [{ ...tempTask, application_id: app.id }, ...prev]);
+
     setNewTaskText("");
     setShowAddTask(false);
     try {
@@ -198,11 +218,18 @@ export default function Drawer({ app, onClose, onUpdateApp }: DrawerProps) {
       });
       if (res.ok) {
         const created: Task = await res.json();
+        // Replace temp task with real server task (has correct id)
         setTasks(prev => prev.map(t => t.id === tempId ? created : t));
+        setGlobalTasks(prev => prev.map(t => t.id === tempId ? { ...created, application_id: app.id } : t));
         refreshApplication(app.id);
+      } else {
+        // Rollback on server failure
+        setTasks(prev => prev.filter(t => t.id !== tempId));
+        setGlobalTasks(prev => prev.filter(t => t.id !== tempId));
       }
     } catch {
       setTasks(prev => prev.filter(t => t.id !== tempId));
+      setGlobalTasks(prev => prev.filter(t => t.id !== tempId));
     }
   };
 
@@ -795,7 +822,7 @@ function TaskItem({ task, onToggle, onDelete }: { task: Task; onToggle: () => vo
       onMouseLeave={() => setHovered(false)}
       style={{
         display: "flex", alignItems: "center", gap: 14, padding: "14px 16px",
-        borderRadius: 14, cursor: "pointer",
+        borderRadius: 14,
         background: task.done
           ? "linear-gradient(135deg, rgba(16,185,129,0.18), rgba(5,150,105,0.12))"
           : hovered ? "rgba(79,142,247,0.08)" : "rgba(24,28,38,0.7)",

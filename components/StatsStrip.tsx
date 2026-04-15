@@ -84,7 +84,6 @@ function StatCard({ stat, count, index }: { stat: StatConfig; count: number; ind
         position: "relative",
         borderRadius: "18px",
         overflow: "hidden",
-        /* ── MORE HEIGHT: padding increased top+bottom ── */
         padding: "26px 22px 28px",
         background: hovered ? "rgba(255,255,255,0.048)" : "rgba(255,255,255,0.022)",
         border: `1px solid ${hovered ? a + "55" : "rgba(255,255,255,0.07)"}`,
@@ -103,7 +102,6 @@ function StatCard({ stat, count, index }: { stat: StatConfig; count: number; ind
           "background 0.25s ease",
         ].join(","),
         cursor: "default",
-        /* ── MIN HEIGHT so cards never collapse ── */
         minHeight: "170px",
       }}
     >
@@ -123,14 +121,14 @@ function StatCard({ stat, count, index }: { stat: StatConfig; count: number; ind
         transition: "opacity 0.35s ease",
       }} />
 
-      {/* Sparkles */}
-      {hovered && count > 0 && <>
+      {/* ── FIX 1: Sparkles show on hover for ALL cards, count check removed ── */}
+      {hovered && <>
         <Sparkle top={10} right={12} color={a} delay={0}   size={4} />
         <Sparkle top={22} right={26} color={a} delay={110} size={3} />
         <Sparkle top={16} right={38} color={a} delay={55}  size={2} />
       </>}
 
-      {/* Icon chip — slightly larger */}
+      {/* Icon chip */}
       <div style={{
         width: "46px", height: "46px", borderRadius: "13px",
         background: `${a}18`,
@@ -144,15 +142,15 @@ function StatCard({ stat, count, index }: { stat: StatConfig; count: number; ind
         <Icon color={hovered ? a : `${a}aa`} />
       </div>
 
-      {/* Count — larger number */}
+      {/* ── FIX 2: Smaller, well-proportioned number ── */}
       <div style={{
         fontFamily: "'Syne', system-ui, sans-serif",
-        fontSize: "42px",
-        fontWeight: 900,
+        fontSize: "40px",
+        fontWeight: 700,
         lineHeight: 1,
         marginBottom: "10px",
         color: hovered ? a : `${a}bb`,
-        letterSpacing: "-1.5px",
+        letterSpacing: "-0.5px",
         transition: "color 0.25s ease, text-shadow 0.25s ease",
         textShadow: hovered ? `0 0 28px ${a}55` : "none",
       }}>
